@@ -18,7 +18,7 @@ log = logging.getLogger("main")
 app = Flask(__name__, static_folder="web", static_url_path="")
 
 # Налаштування CORS
-allowed = os.getenv("URL", "http://localhost:5000")
+allowed = os.getenv("crm_url", "http://localhost:5000")
 CORS(app, resources={r"/api/*": {"origins": [d.strip() for d in allowed.split(",")]}})
 
 # ─────────────── Динамічне завантаження API-модулів
