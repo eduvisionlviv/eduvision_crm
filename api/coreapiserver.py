@@ -2,6 +2,7 @@
 import os
 import logging
 import threading
+from typing import Optional
 from flask import g
 from appwrite.client import Client
 from appwrite.services.databases import Databases
@@ -13,6 +14,16 @@ log = logging.getLogger("coreapiserver")
 
 _client = None
 _databases = None
+
+
+class _Response:
+    def __init__(self, data=None, error: Optional[str] = None):
+        self.data = data
+        self.error = error
+
+
+def _make_response(data=None, error: Optional[str] = None):
+    return _Response(data=data, error=error)
 
 
 def _get_env_value(primary: str, *fallbacks: str, default: str = None) -> str:
@@ -53,6 +64,10 @@ ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
 ALT_ENDPOINTS  = (
     "APPWRITE_API_ENDPOINT",
     "APPWRITE_HOST",
+    "appwriteendpoint",
+    "appwrite_endpoint",
+    "appwrite_api_endpoint",
+    "appwrite_host",
 )
 
 # === МАПІНГ ТАБЛИЦЬ (Код -> Appwrite) ===
@@ -173,6 +188,31 @@ def with_global_lock(app):
 
     return app
 
+
+def _mask(value: str, keep: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= keep:
+        return "*" * len(value)
+    return f"{'*' * (len(value) - keep)}{value[-keep:]}"
+
+
+def describe_appwrite_config():
+    """Return a masked snapshot of Appwrite config to simplify debugging."""
+
+    endpoint = _get_env_value(ENV_ENDPOINT, *ALT_ENDPOINTS, default="https://cloud.appwrite.io/v1")
+    project_id = _get_env_value(ENV_PROJECT_ID, *ALT_PROJECT_IDS)
+    api_key = _get_env_value(ENV_API_KEY, *ALT_API_KEYS)
+    db_id = _get_env_value(ENV_DB_ID, *ALT_DB_IDS)
+
+    return {
+        "endpoint": endpoint,
+        "project_id": _mask(project_id),
+        "api_key": _mask(api_key),
+        "database_id": _mask(db_id),
+        "tables": TABLE_MAPPING,
+    }
+
 def _get_services():
     global _client, _databases
     if _databases:
@@ -197,6 +237,15 @@ def _get_services():
     _client.set_key(api_key)
 
     _databases = Databases(_client)
+    cfg = describe_appwrite_config()
+    log.info(
+        "✅ Appwrite client initialized (endpoint=%s project=%s db=%s)",
+        cfg.get("endpoint"),
+        cfg.get("project_id"),
+        cfg.get("database_id"),
+    )
+    if endpoint == "https://cloud.appwrite.io/v1" and not os.getenv(ENV_ENDPOINT):
+        log.info("ℹ️ Використовується дефолтний Appwrite endpoint. Додайте %s якщо ваш інший.", ENV_ENDPOINT)
     return _databases
 
 def _translate_input_data(data):
@@ -277,7 +326,7 @@ class AppwriteAdapter:
                 ENV_DB_ID,
                 ", ".join(ALT_DB_IDS),
             )
-            return type('Response', (object,), {"data": None})
+            return _make_response(data=None, error="missing_database_id")
 
         try:
             # --- INSERT ---
@@ -285,7 +334,7 @@ class AppwriteAdapter:
                 res = self.db_service.create_document(
                     self.db_id, self.table_name, ID.unique(), self.data_payload
                 )
-                return type('Response', (object,), {"data": _translate_output_doc(res)})
+                return _make_response(data=_translate_output_doc(res))
 
             # --- SELECT / UPDATE SEARCH ---
             result = self.db_service.list_documents(
@@ -301,19 +350,19 @@ class AppwriteAdapter:
                         self.db_id, self.table_name, doc['$id'], self.data_payload
                     )
                     updated_list.append(_translate_output_doc(upd))
-                return type('Response', (object,), {"data": updated_list})
+                return _make_response(data=updated_list)
 
             # --- SELECT RESULT ---
             if self.is_single:
                 final_data = _translate_output_doc(documents[0]) if documents else None
             else:
                 final_data = [_translate_output_doc(d) for d in documents]
-            
-            return type('Response', (object,), {"data": final_data})
+
+            return _make_response(data=final_data)
 
         except Exception as e:
             log.error(f"⚠️ Appwrite Error in {self.table_name} ({self.op_type}): {e}")
-            return type('Response', (object,), {"data": None})
+            return _make_response(data=None, error=str(e))
 
 def get_client_for_table(table_name: str = None):
     return AppwriteAdapter(table_name)

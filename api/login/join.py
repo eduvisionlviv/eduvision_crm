@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 from flask import Blueprint, request, jsonify, make_response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from api.coreapiserver import get_client_for_table, clear_cache
+from api.coreapiserver import get_client_for_table, clear_cache, describe_appwrite_config
 from services import tg_bot
 from services.gmail import send_email, GmailConfigError
 
@@ -421,20 +421,37 @@ def register_user():
         if register.table("register").select("id").eq("user_email", email).execute().data:
             return jsonify(message="Заявку вже подано. Очікуйте підтвердження."), 200
 
-        register.table("register").insert({
+        res = register.table("register").insert({
             "user_email": email,
             "user_name":  name,
             "user_phone": phone,
             "pass_email": hash_password(pwd),
         }).execute()
 
+        if not getattr(res, "data", None):
+            cfg = describe_appwrite_config()
+            detail = res.error or "insert returned no data"
+            log.error(
+                "register insert returned no data for %s — reason=%s config=%s",
+                _mask_email(email),
+                detail,
+                cfg,
+            )
+            body = {"error": "server_error", "message": "Не вдалося створити заявку."}
+            if DEBUG_ERRORS:
+                body["detail"] = detail
+                body["config"] = cfg
+            return jsonify(body), 500
+
         return jsonify(message="Заявку прийнято. Очікуйте підтвердження адміністратора."), 200
 
     except Exception as e:
+        cfg = describe_appwrite_config()
         body = {"error": "server_error", "message": "Не вдалося створити заявку."}
         if DEBUG_ERRORS:
             body["detail"] = str(e)
-        log.error("register failed for %s: %s", _mask_email(email), e)
+            body["config"] = cfg
+        log.error("register failed for %s: %s config=%s", _mask_email(email), e, cfg)
         return jsonify(body), 500
 
 
