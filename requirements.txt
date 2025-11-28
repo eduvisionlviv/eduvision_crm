@@ -5,3 +5,4 @@ sqlalchemy
 pydantic
 passlib[bcrypt]
 cryptography
+appwrite
