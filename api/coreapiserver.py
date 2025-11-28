@@ -49,17 +49,24 @@ FIELD_MAPPING = {
     "full_name": "fullName",
     "birth_date": "birthDate",
     "parent_id": "parentId",
+    "notes": "notes",
     "enrollment_date": "enrollmentDate",
     "grade_level": "gradeLevel",
     "student_status": "studentStatus",
 
     # CRM: батьки
+    "full_name": "fullName",
+    "phone": "phone",
+    "email": "email",
+    "notes": "notes",
     "api_key_id": "apiKeyId",
     "api_secret": "apiSecret",
     "webhook_secret": "webhookSecret",
     "created_by": "createdBy",
 
     # CRM: курси
+    "name": "name",
+    "description": "description",
     "age_from": "ageFrom",
     "age_to": "ageTo",
     "start_time": "startTime",
@@ -67,12 +74,18 @@ FIELD_MAPPING = {
     "max_participants": "maxParticipants",
 
     # CRM: запис на курс
+    "status": "status",
     "student_id": "studentId",
     "course_id": "courseId",
     "start_date": "startDate",
     "completion_date": "completionDate",
 
     # CRM: оплати
+    "student_id": "studentId",
+    "amount": "amount",
+    "currency": "currency",
+    "period": "period",
+    "comment": "comment",
     "payment_type": "paymentType",
     "payment_id": "paymentId",
     "payment_method": "paymentMethod",
