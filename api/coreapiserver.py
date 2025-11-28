@@ -1,203 +1,130 @@
-# api/coreapiserver.py
 import os
-import logging
+import time
 import threading
-from flask import g
-from appwrite.client import Client
-from appwrite.services.databases import Databases
-from appwrite.query import Query
-from appwrite.id import ID
+from typing import Any, Optional, Tuple
+from flask import request
+from supabase import create_client, Client
+import logging
+from threading import Lock
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 log = logging.getLogger("coreapiserver")
 
-_client = None
-_databases = None
+update_lock = Lock()
 
-# === ЗМІННІ СЕРЕДОВИЩА ===
-ENV_PROJECT_ID = "appwriteprojectid"
-ENV_API_KEY    = "appwritepadmin"
-ENV_DB_ID      = "appwritedatabaseid"
-ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
+# ───────────────────────────────
+# 🔐 ПІДКЛЮЧЕННЯ ДО SUPABASE (відкладене)
+# ───────────────────────────────
+_supabase_main = None
+_supabase_stock = None
 
-# === 1. МАПІНГ ТАБЛИЦЬ ===
-TABLE_MAPPING = {
-    "contacts": "contacts",
-    "register": "register",
-    "students": "crm_students",
-    "parents": "crm_parents",
-    "courses": "crm_courses",
-    "enrollments": "crm_enrollments",
-    "payments": "crm_payments",
-    "bank_keys": "crm_bank_keys",
-    "uni_base": "uni_base",
-    "scheduled_tasks": "scheduled_tasks",
-    "black_list": "black_list"
+def get_supabase_clients():
+    global _supabase_main, _supabase_stock
+
+    if _supabase_main and _supabase_stock:
+        return _supabase_main, _supabase_stock
+
+    url1 = os.getenv("SUPABASE_URL1")
+    key1 = os.getenv("HDD")
+    url2 = os.getenv("SUPABASE_URL2")
+    key2 = os.getenv("HDD2")
+
+    if not url1 or not key1 or not url2 or not key2:
+        raise ValueError("❌ Не вистачає даних для підключення до Supabase!")
+
+    _supabase_main = create_client(url1, key1)
+    _supabase_stock = create_client(url2, key2)
+    return _supabase_main, _supabase_stock
+
+# ───────────────────────────────
+# 🗺️ МАПА ТАБЛИЦЬ ДО БАЗ
+# ───────────────────────────────
+TABLE_DB_MAP = {
+    # Main DB
+    "carriers": "main",
+    "contacts": "main",
+    "delivery_address": "main",
+    "order": "main",
+    "register": "main",
+    "rekvisit": "main",
+    "black_list": "main",
+    "menu": "main",
+    "price_reserve": "main",
+    "sklad_moves": "main",
+    "sklad_move_name": "main",
+
+    # Stock DB
+    "courses": "stock",
+    "calendar": "stock",
+    "type_calendar": "stock",
+    "reserve": "stock",
+    "sklad": "stock",
+    "rozrahunky": "stock",
+    "rozrahunky_type": "stock",
+    "uni_base": "stock",
+    "scheduled_tasks": "stock",
+    "invoice": "stock",
+    "return": "stock",
 }
 
-# === 2. МАПІНГ ПОЛІВ ===
-FIELD_MAPPING = {
-    # --- CONTACTS (user_admin) ---
-    "user_name":      "username",      # Код -> База
-    "user_access":    "role",
-    "user_id":        "userId",
-    "recovery_tg_id": "user_tg_id",    # Ваше нове поле
-    "is_active":      "isActive",
-    "last_login":     "lastLogin",
-    
-    # Поля, що збігаються
-    "user_email":     "user_email",
-    "pass_email":     "pass_email",
-    "user_phone":     "user_phone",
-    "user_tg_id":     "user_tg_id",
-    "auth_tokens":    "auth_tokens",
-    "expires_at":     "expires_at",
+def get_client_for_table(table_name: str) -> Client:
+    main, stock = get_supabase_clients()
+    db_target = TABLE_DB_MAP.get(table_name, "main")
+    return stock if db_target == "stock" else main
 
-    # Поля для відновлення паролю (якщо додасте їх в базу)
-    "recovery_code":  "recovery_code", 
-    "password_resets_time": "password_resets_time",
+# ───────────────────────────────
+# 🔁 IN-MEMORY КЕШУВАННЯ
+# ───────────────────────────────
+CACHE_TTL = 1800  # 30 хвилин
+cache: dict[Tuple[str, str], Tuple[float, Any]] = {}
 
-    # --- CRM ---
-    "full_name": "fullName",
-    "birth_date": "birthDate",
-    "parent_id": "parentId",
-    "notes": "notes",
-    "student_id": "studentId",
-    "course_id": "courseId",
-    "start_date": "startDate",
-    "payment_type": "paymentType",
-}
+def get_cache_key(table: str, column: Optional[str] = None) -> Tuple[str, str]:
+    return (table, column if column else "all")
 
-REVERSE_FIELD_MAPPING = {v: k for k, v in FIELD_MAPPING.items()}
+def get_from_cache(table: str, column: Optional[str] = None) -> Optional[Any]:
+    key = get_cache_key(table, column)
+    entry = cache.get(key)
+    if entry:
+        timestamp, data = entry
+        if time.time() - timestamp < CACHE_TTL:
+            return data
+        cache.pop(key, None)
+    return None
 
+def set_cache(table: str, data: Any, column: Optional[str] = None):
+    key = get_cache_key(table, column)
+    cache[key] = (time.time(), data)
+
+def clear_cache(table: str, column: Optional[str] = None):
+    key = get_cache_key(table, column)
+    cache.pop(key, None)
+
+# ───────────────────────────────
+# 🔒 ГЛОБАЛЬНИЙ LOCK
+# ───────────────────────────────
+update_lock = threading.Lock()
+
+# 🔁 Обмежити блокування лише для обраних маршрутів
+LOCKED_PATHS = [
+    "/api/rozrahunky",
+    "/api/go_reserve",
+    "/api/go_fin_order",
+    "/api/save-smart"
+]
+
+# ───────────────────────────────
+# 🔌 Flask middleware для lock
+# ───────────────────────────────
 def with_global_lock(app):
-    lock = threading.RLock()
     @app.before_request
-    def _acquire():
-        lock.acquire()
-        g._lock = True
+    def acquire_lock():
+        if not LOCKED_PATHS or request.path in LOCKED_PATHS:
+            request._lock = update_lock
+            request._lock.acquire()
+
     @app.after_request
-    def _release(resp):
-        if getattr(g, "_lock", False):
-            try: lock.release()
-            except: pass
-        return resp
-    @app.teardown_request
-    def _teardown(_):
-        if getattr(g, "_lock", False):
-            try: lock.release()
-            except: pass
-    return app
-
-def _get_services():
-    global _client, _databases
-    if _databases: return _databases
-
-    ep = os.getenv(ENV_ENDPOINT, "https://cloud.appwrite.io/v1")
-    pid = os.getenv(ENV_PROJECT_ID) or os.getenv("APPWRITE_PROJECT_ID")
-    key = os.getenv(ENV_API_KEY) or os.getenv("APPWRITE_API_KEY")
-
-    if not (pid and key):
-        log.error("❌ Appwrite credentials missing!")
-        return None
-
-    _client = Client()
-    _client.set_endpoint(ep).set_project(pid).set_key(key)
-    _databases = Databases(_client)
-    return _databases
-
-def _map_input(data):
-    if not data: return data
-    return {FIELD_MAPPING.get(k, k): v for k, v in data.items()}
-
-def _map_output(doc):
-    if not doc: return None
-    new_doc = doc.copy()
-    for db_k, v in doc.items():
-        if db_k in REVERSE_FIELD_MAPPING:
-            new_doc[REVERSE_FIELD_MAPPING[db_k]] = v
-    return new_doc
-
-class AppwriteAdapter:
-    def __init__(self, table_name=None):
-        self.db = _get_services()
-        self.db_id = os.getenv(ENV_DB_ID) or os.getenv("APPWRITE_DATABASE_ID")
-        self.table_name = TABLE_MAPPING.get(table_name, table_name)
-        self.queries = []
-        self.payload = None
-        self.op = None
-        self.single_doc = False
-
-    def table(self, name):
-        self.table_name = TABLE_MAPPING.get(name, name)
-        return self
-
-    def select(self, cols="*"):
-        self.op = 'select'
-        return self
-
-    def eq(self, col, val):
-        self.queries.append(Query.equal(FIELD_MAPPING.get(col, col), val))
-        return self
+    def release_lock(response):
+        if hasattr(request, "_lock"):
+            request._lock.release()
+        return response
     
-    def gt(self, col, val):
-        self.queries.append(Query.greater_than(FIELD_MAPPING.get(col, col), val))
-        return self
-
-    def lte(self, col, val):
-        self.queries.append(Query.less_than_equal(FIELD_MAPPING.get(col, col), val))
-        return self
-
-    def single(self):
-        self.single_doc = True
-        return self
-
-    def insert(self, data):
-        self.op = 'insert'
-        self.payload = _map_input(data)
-        return self
-
-    def update(self, data):
-        self.op = 'update'
-        self.payload = _map_input(data)
-        return self
-    
-    def delete(self):
-        self.op = 'delete'
-        return self
-    
-    def in_(self, col, vals):
-        self.queries.append(Query.contains(FIELD_MAPPING.get(col, col), vals))
-        return self
-
-    def execute(self):
-        if not self.db_id: return type('R', (), {"data": None})
-
-        try:
-            if self.op == 'insert':
-                res = self.db.create_document(self.db_id, self.table_name, ID.unique(), self.payload)
-                return type('R', (), {"data": _map_output(res)})
-
-            docs = self.db.list_documents(self.db_id, self.table_name, queries=self.queries)['documents']
-
-            if self.op == 'update':
-                updated = [self.db.update_document(self.db_id, self.table_name, d['$id'], self.payload) for d in docs]
-                return type('R', (), {"data": [_map_output(d) for d in updated]})
-
-            if self.op == 'delete':
-                for d in docs: self.db.delete_document(self.db_id, self.table_name, d['$id'])
-                return type('R', (), {"data": True})
-
-            data = [_map_output(d) for d in docs]
-            final = data[0] if (self.single_doc and data) else data
-            return type('R', (), {"data": final})
-
-        except Exception as e:
-            log.error(f"⚠️ DB Error [{self.table_name}]: {e}")
-            return type('R', (), {"data": None})
-
-def get_client_for_table(name=None):
-    return AppwriteAdapter(name)
-
-def clear_cache(name):
-    pass
+    log.info("✅ Global lock middleware activated (coreapiserver)")
