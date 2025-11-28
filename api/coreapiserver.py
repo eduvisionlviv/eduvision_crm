@@ -42,8 +42,12 @@ FIELD_MAPPING = {
     "user_name":     "username",
     "user_access":   "role",
     "user_id":       "useradminId",
-    # "user_phone":  "user_phone",   <-- Це поле треба додати в базу!
-    # "auth_tokens": "auth_tokens",  <-- Це поле треба додати в базу!
+    "user_phone":    "user_phone",
+    "auth_tokens":   "auth_tokens",
+    "expires_at":    "expires_at",
+    "recovery_tg_id": "recovery_tg_id",
+    "recovery_code":  "recovery_code",
+    "password_resets_time": "password_resets_time",
 }
 
 # Створюємо зворотний словник для перекладу відповіді від бази
