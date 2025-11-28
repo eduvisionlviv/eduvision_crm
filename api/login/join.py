@@ -4,7 +4,7 @@ import re
 import secrets
 import datetime as dt
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from flask import Blueprint, request, jsonify, make_response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -20,7 +20,9 @@ bps = (bp_auth, bp_tg)
 
 log = logging.getLogger("login.join")
 
-# ── Cookie / TTL
+# ─────────────────────────────────────────────────────────────
+# КОНФІГУРАЦІЯ
+# ─────────────────────────────────────────────────────────────
 COOKIE_NAME     = "edu_session"
 AUTH_TTL_HOURS  = int(os.getenv("AUTH_TTL_HOURS", "168"))  # 7 днів
 EMAIL_RX        = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -37,6 +39,15 @@ RECOVERY_CHAT_FIELD   = "recovery_tg_id"
 RESET_CODE_FIELD      = "recovery_code"
 RESET_TIME_FIELD      = "password_resets_time"
 
+# Список таблиць для авторизації (пріоритет зверху вниз)
+# (назва_таблиці, дефолтна_роль, поле_ролі_в_бд)
+AUTH_TABLES = [
+    ("contacts", "teacher", "user_access"),  # Вчителі/Адміни
+    ("parents",  "parent",  None),           # Батьки
+    ("student", "student", None)            # Учні
+]
+
+# Тексти повідомлень (зберігаємо ваші оригінальні)
 FORGOT_GENERIC_MSG     = "Якщо акаунт існує — ми надіслали інструкції з відновлення."
 FORGOT_TG_MSG          = "Якщо акаунт існує — ми надіслали інструкції у Telegram."
 FORGOT_EMAIL_MSG       = "Якщо акаунт існує — ми надіслали інструкції на email."
@@ -72,16 +83,16 @@ TG_BAD_TOKEN_TEXT = (
     "Поверніться на сайт EduVision і натисніть «Надіслати лист» ще раз."
 )
 
-# ── Перевірка пароля: підтримуємо і хеші, і plaintext (для зворотно сумісних акаунтів)
+# ─────────────────────────────────────────────────────────────
+# УТИЛІТИ
+# ─────────────────────────────────────────────────────────────
 try:
     import bcrypt
-except Exception:  # pragma: no cover - бібліотека має бути встановлена
+except Exception:  # pragma: no cover
     bcrypt = None
-
 
 def _is_bcrypt_hash(stored: str) -> bool:
     return bool(stored and stored.strip().startswith("$2"))
-
 
 def hash_password(raw: str) -> str:
     if not raw:
@@ -89,7 +100,6 @@ def hash_password(raw: str) -> str:
     if not bcrypt:
         raise RuntimeError("bcrypt не встановлений. Додайте його до requirements.txt")
     return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
 
 def _check_pwd(p: str, stored: str) -> bool:
     if not stored:
@@ -108,32 +118,23 @@ def _check_pwd(p: str, stored: str) -> bool:
             return False
     return p == s
 
-
 def _now_iso():
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00"
-
 
 def _utcnow():
     return dt.datetime.now(dt.timezone.utc)
 
-
 def _parse_toggle(value) -> Optional[bool]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
+    """Повертає булеве значення з різних форматів (1, true, on)."""
+    if value is None: return None
+    if isinstance(value, bool): return value
     try:
-        if isinstance(value, (int, float)):
-            return bool(int(value))
-    except (TypeError, ValueError):
-        pass
+        if isinstance(value, (int, float)): return bool(int(value))
+    except (TypeError, ValueError): pass
     text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if text in {"0", "false", "f", "no", "n", "off"}:
-        return False
+    if text in {"1", "true", "t", "yes", "y", "on"}: return True
+    if text in {"0", "false", "f", "no", "n", "off"}: return False
     return None
-
 
 def _get_recovery_toggles() -> Tuple[bool, bool]:
     """Повертає (allow_tg, allow_email) з урахуванням налаштування в uni_base."""
@@ -158,26 +159,19 @@ def _get_recovery_toggles() -> Tuple[bool, bool]:
 
     return allow_tg, allow_email
 
-
 def _parse_timestamp(value: Optional[str]) -> Optional[dt.datetime]:
-    if not value:
-        return None
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
+    if not value: return None
+    text = value.strip().replace("Z", "+00:00")
     try:
         parsed = dt.datetime.fromisoformat(text)
-    except ValueError:
-        return None
+    except ValueError: return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
 
-
 def _exp_iso():
     return (dt.datetime.utcnow() + dt.timedelta(hours=AUTH_TTL_HOURS)) \
             .replace(microsecond=0).isoformat() + "+00:00"
-
 
 def _set_cookie(resp, token: str):
     resp.set_cookie(
@@ -187,222 +181,208 @@ def _set_cookie(resp, token: str):
     )
     return resp
 
-
-def _payload_from_row(row: dict):
+def _payload_from_row(row: dict, table_name: str = "contacts"):
+    """Формує відповідь для фронтенду, адаптуючи поля залежно від таблиці."""
+    role = _get_user_role(row, table_name)
     payload = {
         "user_id":      row.get("user_id"),
-        "user_name":    row.get("user_name"),
-        "user_phone":   row.get("user_phone"),
-        "user_access":  row.get("user_access"),
+        "user_name":    row.get("user_name") or row.get("full_name"), # fallback для parents/students
+        "user_phone":   row.get("user_phone") or row.get("phone"),
+        "user_email":   row.get("user_email") or row.get("email"),
+        "user_access":  role,
+        "role":         role,
+        "table":        table_name,
         "extra_access": row.get("extra_access"),
     }
     payload["need_tg_setup"] = _need_tg_setup(row)
     return payload
 
-
 def _mask_email(e: str) -> str:
-    if not e:
-        return "-"
+    if not e: return "-"
     e = e.strip().lower()
     m = re.match(r"^([^@]{0,3})[^@]*(@.*)$", e)
     return (m.group(1) + "***" + m.group(2)) if m else e[:2] + "***"
 
-
 def _fail_invalid():
     return jsonify(error="invalid_credentials", message="Невірний email або пароль"), 401
 
-
 def _need_tg_setup(row: dict) -> bool:
-    """Telegram-підключення є обов'язковим незалежно від uni_base."""
     recovery = _get_recovery_chat(row)
     return not bool(recovery)
-
 
 def _get_recovery_chat(row: dict) -> Optional[str]:
     return row.get(RECOVERY_CHAT_FIELD) or row.get("recovery_pass_tg")
 
-
 def _normalize_phone(phone: Optional[str]) -> Optional[str]:
-    if not phone:
-        return None
+    if not phone: return None
     digits = re.sub(r"\D", "", phone)
-    if not digits:
-        return None
-
-    core = None
-    if digits.startswith("380") and len(digits) >= 12:
-        core = digits[-9:]
-    elif digits.startswith("0") and len(digits) >= 10:
-        core = digits[-9:]
-    elif len(digits) == 9:
-        core = digits
-
-    if not core or len(core) != 9:
-        return None
-
+    if not digits: return None
+    if digits.startswith("380") and len(digits) >= 12: core = digits[-9:]
+    elif digits.startswith("0") and len(digits) >= 10: core = digits[-9:]
+    elif len(digits) == 9: core = digits
+    else: return None
     return "+380" + core
 
-
 def _get_link_serializer() -> URLSafeTimedSerializer:
-    """Return a deterministic secret for signing Telegram link tokens."""
-
     secret = None
     for key in ("TG_LINK_SECRET", "SECRET_KEY", "HDD", "HDD2"):
         value = os.getenv(key)
         if value:
             secret = value
             break
-
     if not secret:
-        raise RuntimeError(
-            "Задайте TG_LINK_SECRET або SECRET_KEY (можна використати HDD/HDD2) для Telegram-прив'язки"
-        )
-
+        raise RuntimeError("No SECRET_KEY for TG link")
     return URLSafeTimedSerializer(secret_key=secret, salt="eduvision-tg-link")
 
-
-def _sign_user_token(user_id: int) -> str:
+# ОНОВЛЕНО: додано table
+def _sign_user_token(user_id: int, table: str = "contacts") -> str:
     serializer = _get_link_serializer()
-    return serializer.dumps({"user_id": user_id})
+    return serializer.dumps({"user_id": user_id, "table": table})
 
-
-def _unsign_user_token(token: str) -> int:
+# ОНОВЛЕНО: повертає ID і table
+def _unsign_user_token(token: str) -> Tuple[int, str]:
     serializer = _get_link_serializer()
     data = serializer.loads(token, max_age=TG_LINK_TOKEN_TTL_HRS * 3600)
-    return int(data.get("user_id"))
+    return int(data.get("user_id")), data.get("table", "contacts")
 
-
-def _issue_session(contacts_client, user_id: int) -> Tuple[str, str]:
+def _issue_session(client, table: str, user_id: int) -> Tuple[str, str]:
     token = secrets.token_urlsafe(32)
     exp   = _exp_iso()
-    contacts_client.table("contacts").update({
+    client.table(table).update({
         "auth_tokens": token,
         "expires_at":  exp
     }).eq("user_id", user_id).execute()
     return token, exp
 
-
 def _build_reset_link(token: str) -> str:
-    if PUBLIC_APP_URL:
-        base = PUBLIC_APP_URL.rstrip("/") + "/"
-    else:
-        base = request.host_url
-    return f"{base}#reset?token={token}"
+    base = (PUBLIC_APP_URL or request.host_url).rstrip("/")
+    return f"{base}/#reset?token={token}"
 
-
-def _store_reset_code(user_id: int) -> Tuple[str, str]:
-    contacts = get_client_for_table("contacts")
+def _store_reset_code(client, table: str, user_id: int) -> Tuple[str, str]:
     token = secrets.token_urlsafe(32)
     issued = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    contacts.table("contacts").update({
+    client.table(table).update({
         RESET_CODE_FIELD: token,
         RESET_TIME_FIELD: issued,
     }).eq("user_id", user_id).execute()
-    clear_cache("contacts")
+    clear_cache(table) # Очищаємо кеш конкретної таблиці
     return token, issued
 
-
-def _resolve_user_by_token(token: str) -> Optional[dict]:
-    contacts = get_client_for_table("contacts")
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_name,user_phone,user_email,user_access,extra_access,{tg}".format(
-                tg=RECOVERY_CHAT_FIELD
-            )
-        ).eq("auth_tokens", token).gt("expires_at", _now_iso()).single().execute().data
-    except Exception:
-        row = None
-    return row
-
-
-def _get_user_for_request() -> Optional[dict]:
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        return None
-    return _resolve_user_by_token(token)
-
-
 def _send_tg_reset(chat_id: str, link: str) -> None:
-    chat = int(chat_id)
-    tg_bot.send_message_httpx(chat, (
+    tg_bot.send_message_httpx(int(chat_id), (
         "🔒 Відновлення доступу до EduVision\n"
         "Натисніть на посилання, щоб задати новий пароль:\n"
         f"{link}"
     ))
 
-
 def _send_email_reset(email: str, link: str, subject: str) -> None:
     html = (
         "<p>Щоб відновити доступ до EduVision, перейдіть за посиланням і задайте новий пароль:</p>"
         f"<p><a href=\"{link}\">Відкрити форму скидання паролю</a></p>"
-        "<p>Посилання дійсне обмежений час. Якщо ви не ініціювали запит – просто ігноруйте цей лист.</p>"
+        "<p>Посилання дійсне обмежений час.</p>"
     )
     send_email(email, subject, html)
 
-
 def _send_tg_link_email(email: str, bot_link: str) -> None:
     html = (
-        "<p>Щоб захистити ваш акаунт EduVision, підключіть Telegram-бота Helen Doron English.</p>"
+        "<p>Щоб захистити ваш акаунт EduVision, підключіть Telegram-бота.</p>"
         f"<p><a href=\"{bot_link}\">👉 Відкрити бота</a></p>"
         "<p>Натисніть Start у боті та поділіться номером телефону.</p>"
-        "<p>Поверніться в EduVision, оновіть сторінку та зайдіть ще раз.</p>"
     )
-    send_email(
-        email,
-        "Підключення Telegram-бота Helen Doron English для EduVision",
-        html,
-    )
+    send_email(email, "Підключення Telegram-бота", html)
 
-
-def _get_reset_row(token: str) -> Tuple[Optional[dict], Optional[str]]:
-    contacts = get_client_for_table("contacts")
+def _clear_reset_code(client, table: str, user_id: int) -> None:
     try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,{code},{ts}".format(
-                code=RESET_CODE_FIELD,
-                ts=RESET_TIME_FIELD,
-            )
-        ).eq(RESET_CODE_FIELD, token).single().execute().data
-    except Exception:
-        return None, "invalid"
-
-    if not row or not row.get(RESET_CODE_FIELD):
-        return None, "invalid"
-
-    issued = _parse_timestamp(row.get(RESET_TIME_FIELD))
-    if not issued:
-        return None, "invalid"
-
-    expires_at = issued + dt.timedelta(minutes=RESET_TOKEN_TTL_MIN)
-    if expires_at <= _utcnow():
-        return None, "expired"
-
-    return row, None
-
-
-def _clear_reset_code(user_id: int) -> None:
-    contacts = get_client_for_table("contacts")
-    try:
-        contacts.table("contacts").update({
+        client.table(table).update({
             RESET_CODE_FIELD: None,
             RESET_TIME_FIELD: None,
         }).eq("user_id", user_id).execute()
     except Exception as exc:
         log.warning("Не вдалося очистити код відновлення user_id=%s: %s", user_id, exc)
-    clear_cache("contacts")
-
+    clear_cache(table)
 
 # ─────────────────────────────────────────────────────────────
-# POST /api/login/register — заявка в register
-# body: { user_email, user_name, user_phone, pass_email }
+# NEW: MULTI-TABLE HELPERS
 # ─────────────────────────────────────────────────────────────
+
+def _find_user_in_tables(field: str, value: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Шукає користувача у contacts, parents, students."""
+    if not value: return None, None
+    for table, _, _ in AUTH_TABLES:
+        try:
+            client = get_client_for_table(table)
+            # Шукаємо потрібні поля. Для оптимізації можна вибирати тільки їх, але select("*") надійніше
+            row = client.table(table).select("*").eq(field, value).single().execute().data
+            if row:
+                return row, table
+        except Exception:
+            continue
+    return None, None
+
+def _resolve_user_by_token(token: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Пошук юзера по токену у всіх дозволених таблицях."""
+    if not token: return None, None
+    
+    # Спочатку шукаємо в contacts (найчастіший кейс)
+    # Але для коректності треба пробігтись по всіх або знати таблицю заздалегідь (тут ми не знаємо)
+    row, table = _find_user_in_tables("auth_tokens", token)
+    
+    if row:
+        exp_str = row.get("expires_at")
+        if exp_str:
+            exp_at = _parse_timestamp(exp_str)
+            if exp_at and exp_at > _utcnow():
+                return row, table
+    return None, None
+
+def _get_user_role(row: dict, table: str) -> str:
+    """Визначає роль користувача на основі таблиці."""
+    for t_name, def_role, role_col in AUTH_TABLES:
+        if t_name == table:
+            if role_col and row.get(role_col):
+                return row.get(role_col)
+            return def_role
+    return "guest"
+
+# Helper for other modules (retains backward compatibility)
+def _get_user_for_request() -> Optional[dict]:
+    token = request.cookies.get(COOKIE_NAME)
+    row, table = _resolve_user_by_token(token)
+    if row:
+        # Inject metadata for generic API usage
+        row["user_access"] = _get_user_role(row, table)
+        row["_table"] = table 
+    return row
+
+def _get_reset_row(token: str) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+    """Повертає (row, reason, table_name)."""
+    row, table = _find_user_in_tables(RESET_CODE_FIELD, token)
+    
+    if not row:
+        return None, "invalid", None
+
+    issued = _parse_timestamp(row.get(RESET_TIME_FIELD))
+    if not issued:
+        return None, "invalid", None
+
+    expires_at = issued + dt.timedelta(minutes=RESET_TOKEN_TTL_MIN)
+    if expires_at <= _utcnow():
+        return None, "expired", None
+
+    return row, None, table
+
+# ─────────────────────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────────────────────
+
 @bp.post("/register")
 def register_user():
+    # Цей метод стосується ТІЛЬКИ співробітників (contacts), тому логіку не змінюємо
     b = request.get_json(silent=True) or {}
     email = (b.get("user_email") or "").strip().lower()
     name  = (b.get("user_name")  or "").strip()
     phone = (b.get("user_phone") or "").strip()
-    pwd   =  (b.get("pass_email") or "")
+    pwd   = (b.get("pass_email") or "")
 
     if not (email and name and phone and pwd):
         return jsonify(error="validation_error", message="Заповніть усі поля"), 400
@@ -437,30 +417,17 @@ def register_user():
         log.error("register failed for %s: %s", _mask_email(email), e)
         return jsonify(body), 500
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/login/join — логін
-# body: { email, password } або { user_email, pass_email }
-# ─────────────────────────────────────────────────────────────
 @bp.post("/join")
 def join():
     b = request.get_json(silent=True) or {}
     email = (b.get("email") or b.get("user_email") or "").strip().lower()
-    pwd   =  (b.get("password") or b.get("pass_email") or "")
+    pwd   = (b.get("password") or b.get("pass_email") or "")
 
     if not email or not pwd:
         return _fail_invalid()
 
-    contacts = get_client_for_table("contacts")
-
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,user_phone,user_access,extra_access,pass_email,{tg}".format(
-                tg=RECOVERY_CHAT_FIELD
-            )
-        ).eq("user_email", email).single().execute().data
-    except Exception:
-        row = None
+    # ОНОВЛЕНО: Пошук по всіх таблицях
+    row, table = _find_user_in_tables("user_email", email)
 
     if not row:
         log.info("login fail (no user): %s", _mask_email(email))
@@ -471,67 +438,61 @@ def join():
         log.info("login fail (bad pwd): %s", _mask_email(email))
         return _fail_invalid()
 
+    client = get_client_for_table(table)
+
+    # Оновлення хешу до bcrypt, якщо старий (тільки якщо є права запису)
     if not _is_bcrypt_hash(stored):
         try:
             new_hash = hash_password(pwd)
-            contacts.table("contacts").update({"pass_email": new_hash}).eq("user_id", row["user_id"]).execute()
+            client.table(table).update({"pass_email": new_hash}).eq("user_id", row["user_id"]).execute()
             row["pass_email"] = new_hash
         except Exception as exc:
-            log.warning("Не вдалося оновити пароль до bcrypt для user_id=%s: %s", row.get("user_id"), exc)
+            log.warning("Не вдалося оновити пароль до bcrypt: %s", exc)
 
     try:
-        token, _ = _issue_session(contacts, row["user_id"])
+        token, _ = _issue_session(client, table, row["user_id"])
     except Exception as e:
         body = {"error":"server_error", "message":"Не вдалося видати сесію"}
         if DEBUG_ERRORS: body["detail"] = str(e)
-        log.error("set auth token failed for user_id=%s: %s", row.get("user_id"), e)
+        log.error("set auth token failed: %s", e)
         return jsonify(body), 500
 
-    payload = _payload_from_row(row)
+    # ОНОВЛЕНО: payload_from_row з урахуванням таблиці
+    payload = _payload_from_row(row, table)
     resp = make_response(jsonify(ok=True, need_tg_setup=payload["need_tg_setup"]))
     return _set_cookie(resp, token)
 
-
-# ─────────────────────────────────────────────────────────────
-# GET /api/login/me — плоскі поля для фронту
-# ────────────────────────────────────────────────────────────
 @bp.get("/me")
 def me():
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return jsonify(error="unauthorized"), 401
 
-    row = _resolve_user_by_token(token)
+    row, table = _resolve_user_by_token(token)
 
     if not row:
         return jsonify(error="unauthorized"), 401
 
-    payload = _payload_from_row(row)
+    payload = _payload_from_row(row, table)
     return jsonify(ok=True, **payload, user=payload)
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/login/logout — вихід
-# ─────────────────────────────────────────────────────────────
 @bp.post("/logout")
 def logout():
     token = request.cookies.get(COOKIE_NAME)
-    contacts = get_client_for_table("contacts")
     if token:
-        try:
-            contacts.table("contacts").update({"auth_tokens": None, "expires_at": None}) \
-                    .eq("auth_tokens", token).execute()
-        except Exception as e:
-            log.info("logout token clear failed: %s", e)
+        row, table = _resolve_user_by_token(token)
+        if row:
+            try:
+                client = get_client_for_table(table)
+                client.table(table).update({"auth_tokens": None, "expires_at": None}) \
+                        .eq("auth_tokens", token).execute()
+            except Exception as e:
+                log.info("logout token clear failed: %s", e)
     resp = make_response(jsonify(ok=True))
     resp.set_cookie(COOKIE_NAME, "", path="/", max_age=0,
                     httponly=True, secure=COOKIE_SECURE, samesite="Lax")
     return resp
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/login/forgot — запит на скидання паролю
-# ─────────────────────────────────────────────────────────────
 @bp.post("/forgot")
 def forgot_password():
     data = request.get_json(silent=True) or {}
@@ -540,17 +501,13 @@ def forgot_password():
     if not EMAIL_RX.match(email):
         return jsonify(message=FORGOT_GENERIC_MSG), 200
 
-    contacts = get_client_for_table("contacts")
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,{tg}".format(tg=RECOVERY_CHAT_FIELD)
-        ).eq("user_email", email).single().execute().data
-    except Exception:
-        row = None
+    # ОНОВЛЕНО: Пошук по всіх таблицях
+    row, table = _find_user_in_tables("user_email", email)
 
     if not row:
         return jsonify(message=FORGOT_GENERIC_MSG), 200
 
+    # Повертаємо логіку перевірки toggles з бази
     allow_tg, allow_email = _get_recovery_toggles()
 
     recovery_chat = _get_recovery_chat(row)
@@ -572,7 +529,13 @@ def forgot_password():
             msg = FORGOT_UNAVAILABLE_MSG
         return jsonify(message=msg), 200
 
-    token, _ = _store_reset_code(row["user_id"])
+    client = get_client_for_table(table)
+    try:
+        token, _ = _store_reset_code(client, table, row["user_id"])
+    except Exception as e:
+        log.error("Store reset code failed: %s", e)
+        return jsonify(error="server_error"), 500
+
     link = _build_reset_link(token)
 
     try:
@@ -583,9 +546,7 @@ def forgot_password():
             _send_email_reset(email, link, "Скидання паролю EduVision")
             msg = FORGOT_EMAIL_MSG
     except GmailConfigError as exc:
-        log.warning(
-            "email recovery disabled for %s: %s", _mask_email(email), exc
-        )
+        log.warning("email recovery disabled for %s: %s", _mask_email(email), exc)
         return jsonify(message=FORGOT_EMAIL_DISABLED), 200
     except Exception as exc:
         log.error("reset delivery failed for %s: %s", _mask_email(email), exc)
@@ -596,10 +557,6 @@ def forgot_password():
         body["debug_link"] = link
     return jsonify(body)
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/login/reset — новий пароль за токеном
-# ─────────────────────────────────────────────────────────────
 @bp.post("/reset")
 def reset_password():
     data = request.get_json(silent=True) or {}
@@ -611,24 +568,26 @@ def reset_password():
     if not token:
         return jsonify(error="validation_error", message="Некоректний токен"), 400
 
-    row, reason = _get_reset_row(token)
+    # ОНОВЛЕНО: отримання row разом з table
+    row, reason, table = _get_reset_row(token)
+    
     if not row:
         message = RESET_LINK_EXPIRED_MSG if reason == "expired" else RESET_LINK_INVALID_MSG
         return jsonify(error="invalid_token", message=message), 400
 
-    contacts = get_client_for_table("contacts")
+    client = get_client_for_table(table)
     pass_hash = hash_password(new_password)
 
     try:
-        contacts.table("contacts").update({"pass_email": pass_hash}).eq("user_id", row["user_id"]).execute()
+        client.table(table).update({"pass_email": pass_hash}).eq("user_id", row["user_id"]).execute()
     except Exception as exc:
-        log.error("reset password update failed user_id=%s: %s", row["user_id"], exc)
+        log.error("reset password update failed: %s", exc)
         return jsonify(error="server_error", message="Не вдалося оновити пароль"), 500
 
-    _clear_reset_code(row["user_id"])
+    _clear_reset_code(client, table, row["user_id"])
 
     try:
-        token_value, _ = _issue_session(contacts, row["user_id"])
+        token_value, _ = _issue_session(client, table, row["user_id"])
     except Exception:
         token_value = None
 
@@ -637,10 +596,6 @@ def reset_password():
         _set_cookie(resp, token_value)
     return resp
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/auth/send_tg_link — лист із посиланням на бота
-# ─────────────────────────────────────────────────────────────
 @bp_auth.post("/send_tg_link")
 def send_tg_link():
     user = _get_user_for_request()
@@ -654,21 +609,28 @@ def send_tg_link():
         return jsonify(error="config_error", message="Telegram-бот не налаштований"), 500
 
     try:
-        token = _sign_user_token(user["user_id"])
+        # ОНОВЛЕНО: додаємо table в токен
+        table = user.get("_table", "contacts")
+        token = _sign_user_token(user["user_id"], table=table)
     except RuntimeError as exc:
-        log.error("sign token misconfigured for user_id=%s: %s", user.get("user_id"), exc)
+        log.error("sign token misconfigured: %s", exc)
         return jsonify(error="config_error", message=str(exc)), 500
     except Exception as exc:
-        log.error("sign token failed for user_id=%s: %s", user.get("user_id"), exc)
+        log.error("sign token failed: %s", exc)
         return jsonify(error="server_error", message="Не вдалося сформувати посилання"), 500
 
     safe_token = token.replace(".", "-")
     link = f"https://t.me/{bot_username}?start={safe_token}"
 
     try:
-        _send_tg_link_email(user.get("user_email"), link)
+        # Для students/parents може не бути email або він пустий
+        user_email = user.get("user_email")
+        if not user_email:
+             return jsonify(ok=True, bot_link=link, delivery="manual", message="Пошти немає. Скористайтесь посиланням вручну.")
+             
+        _send_tg_link_email(user_email, link)
     except GmailConfigError as exc:
-        log.warning("gmail config missing — returning bot link instead: %s", exc)
+        log.warning("gmail config missing: %s", exc)
         return jsonify(
             ok=True,
             bot_link=link,
@@ -681,10 +643,6 @@ def send_tg_link():
 
     return jsonify(ok=True)
 
-
-# ─────────────────────────────────────────────────────────────
-# POST /api/tg/link_recovery — виклик із Telegram-бота
-# ─────────────────────────────────────────────────────────────
 @bp_tg.post("/link_recovery")
 def link_recovery():
     data = request.get_json(silent=True) or {}
@@ -696,14 +654,18 @@ def link_recovery():
         return jsonify(error="validation_error", bot_text="Недостатньо даних."), 400
 
     try:
-        user_id = _unsign_user_token(token)
+        # ОНОВЛЕНО: розшифровуємо table
+        user_id, table = _unsign_user_token(token)
     except (BadSignature, SignatureExpired) as exc:
         log.warning("link_recovery invalid token: %s", exc)
         return jsonify(error="invalid_token", bot_text=TG_BAD_TOKEN_TEXT), 400
 
-    contacts = get_client_for_table("contacts")
+    client = get_client_for_table(table)
     try:
-        row = contacts.table("contacts").select("user_id,user_phone").eq("user_id", user_id).single().execute().data
+        # Адаптуємо запит під різні таблиці (у student/parents телефон може називатися phone, а не user_phone)
+        # Але в AUTH_TABLES ми не маємо мапінгу колонок.
+        # Спробуємо універсальний select, _normalize_phone розбереться
+        row = client.table(table).select("*").eq("user_id", user_id).single().execute().data
     except Exception as exc:
         log.error("link_recovery user lookup failed: %s", exc)
         row = None
@@ -711,7 +673,9 @@ def link_recovery():
     if not row:
         return jsonify(error="not_found", bot_text="Акаунт не знайдено."), 404
 
-    db_phone = _normalize_phone(row.get("user_phone"))
+    # Отримуємо телефон з різних можливих полів
+    db_phone_raw = row.get("user_phone") or row.get("phone")
+    db_phone = _normalize_phone(db_phone_raw)
     tg_phone = _normalize_phone(phone)
 
     if not db_phone:
@@ -722,14 +686,14 @@ def link_recovery():
 
     try:
         update_data = {
-            RECOVERY_CHAT_FIELD: str(chat_id),  # recovery_tg_id
-            "user_tg_id": str(chat_id),         # основний tg_id користувача
+            RECOVERY_CHAT_FIELD: str(chat_id),
+            "user_tg_id": str(chat_id),
         }
-        contacts.table("contacts").update(update_data).eq("user_id", user_id).execute()
+        client.table(table).update(update_data).eq("user_id", user_id).execute()
 
     except Exception as exc:
         log.error("link_recovery update failed: %s", exc)
         return jsonify(error="server_error", bot_text="Не вдалося зберегти Telegram."), 500
 
-    clear_cache("contacts")
+    clear_cache(table)
     return jsonify(status="ok", bot_text=TG_SUCCESS_TEXT)
