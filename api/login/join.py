@@ -421,12 +421,19 @@ def register_user():
         if register.table("register").select("id").eq("user_email", email).execute().data:
             return jsonify(message="Заявку вже подано. Очікуйте підтвердження."), 200
 
-        register.table("register").insert({
+        res = register.table("register").insert({
             "user_email": email,
             "user_name":  name,
             "user_phone": phone,
             "pass_email": hash_password(pwd),
         }).execute()
+
+        if not getattr(res, "data", None):
+            log.error(
+                "register insert returned no data for %s — check DB env vars and table mapping",
+                _mask_email(email),
+            )
+            return jsonify(error="server_error", message="Не вдалося створити заявку."), 500
 
         return jsonify(message="Заявку прийнято. Очікуйте підтвердження адміністратора."), 200
 
