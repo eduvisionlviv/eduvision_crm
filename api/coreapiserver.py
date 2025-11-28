@@ -1,6 +1,8 @@
 # api/coreapiserver.py
 import os
 import logging
+import threading
+from flask import g
 from appwrite.client import Client
 from appwrite.services.databases import Databases
 from appwrite.query import Query
@@ -134,6 +136,42 @@ FIELD_MAPPING = {
 
 # Створюємо зворотний словник для перекладу відповіді від бази
 REVERSE_FIELD_MAPPING = {v: k for k, v in FIELD_MAPPING.items()}
+
+
+def with_global_lock(app):
+    """
+    Serializes request handling with a single process-wide lock.
+
+    Some legacy modules are not thread-safe; this keeps behaviour consistent
+    with the prior Supabase deployment where requests were effectively
+    serialized. The lock is released in both normal and error flows.
+    """
+
+    lock = threading.RLock()
+
+    @app.before_request
+    def _acquire_lock():  # pragma: no cover - flask lifecycle hook
+        lock.acquire()
+        g._global_lock_acquired = True
+
+    @app.after_request
+    def _release_lock(response):  # pragma: no cover - flask lifecycle hook
+        if getattr(g, "_global_lock_acquired", False):
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+        return response
+
+    @app.teardown_request
+    def _teardown_release(_):  # pragma: no cover - flask lifecycle hook
+        if getattr(g, "_global_lock_acquired", False):
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+
+    return app
 
 def _get_services():
     global _client, _databases
