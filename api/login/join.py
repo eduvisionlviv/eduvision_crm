@@ -4,7 +4,7 @@ import re
 import secrets
 import datetime as dt
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from flask import Blueprint, request, jsonify, make_response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -36,6 +36,13 @@ PUBLIC_APP_URL        = os.getenv("PUBLIC_APP_URL") or os.getenv("APP_BASE_URL")
 RECOVERY_CHAT_FIELD   = "recovery_tg_id"
 RESET_CODE_FIELD      = "recovery_code"
 RESET_TIME_FIELD      = "password_resets_time"
+
+LOGIN_TABLES = ("contacts", "parents", "student")
+ROLE_BY_TABLE = {
+    "contacts": "def",
+    "parents":  "parent",
+    "student":  "student",
+}
 
 FORGOT_GENERIC_MSG     = "Якщо акаунт існує — ми надіслали інструкції з відновлення."
 FORGOT_TG_MSG          = "Якщо акаунт існує — ми надіслали інструкції у Telegram."
@@ -188,14 +195,17 @@ def _set_cookie(resp, token: str):
     return resp
 
 
-def _payload_from_row(row: dict):
+def _payload_from_row(row: dict, table: Optional[str] = None):
     payload = {
         "user_id":      row.get("user_id"),
         "user_name":    row.get("user_name"),
         "user_phone":   row.get("user_phone"),
         "user_access":  row.get("user_access"),
         "extra_access": row.get("extra_access"),
+        "user_table":   table or row.get("user_table"),
     }
+    if not payload["user_access"]:
+        payload["user_access"] = _role_for_table(payload["user_table"])
     payload["need_tg_setup"] = _need_tg_setup(row)
     return payload
 
@@ -261,6 +271,12 @@ def _get_link_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret_key=secret, salt="eduvision-tg-link")
 
 
+def _role_for_table(table: Optional[str]) -> Optional[str]:
+    if not table:
+        return None
+    return ROLE_BY_TABLE.get(table)
+
+
 def _sign_user_token(user_id: int) -> str:
     serializer = _get_link_serializer()
     return serializer.dumps({"user_id": user_id})
@@ -272,14 +288,55 @@ def _unsign_user_token(token: str) -> int:
     return int(data.get("user_id"))
 
 
-def _issue_session(contacts_client, user_id: int) -> Tuple[str, str]:
+def _issue_session(client, user_id: int, table: str) -> Tuple[str, str]:
     token = secrets.token_urlsafe(32)
     exp   = _exp_iso()
-    contacts_client.table("contacts").update({
+    client.table(table).update({
         "auth_tokens": token,
         "expires_at":  exp
     }).eq("user_id", user_id).execute()
     return token, exp
+
+
+def _normalize_account(table: str, row: dict) -> dict:
+    row = dict(row or {})
+    row["user_table"] = table
+    if not row.get("user_access"):
+        row["user_access"] = _role_for_table(table)
+    return row
+
+
+def _find_accounts_by_email(email: str) -> List[dict]:
+    accounts: List[dict] = []
+    for table in LOGIN_TABLES:
+        client = get_client_for_table(table)
+        try:
+            res = client.table(table).select("*").eq("user_email", email).execute()
+            rows = res.data or []
+        except Exception as exc:
+            log.info("lookup failed for %s in %s: %s", _mask_email(email), table, exc)
+            rows = []
+
+        for row in rows:
+            accounts.append({
+                "table": table,
+                "row": _normalize_account(table, row),
+            })
+
+    return accounts
+
+
+def _profiles_from_accounts(accounts: List[dict]) -> List[dict]:
+    profiles = []
+    for acc in accounts:
+        row = acc.get("row") or {}
+        profiles.append({
+            "user_id":   row.get("user_id"),
+            "user_name": row.get("user_name") or row.get("user_email"),
+            "role":      row.get("user_access") or _role_for_table(acc.get("table")),
+            "table":     acc.get("table"),
+        })
+    return profiles
 
 
 def _build_reset_link(token: str) -> str:
@@ -290,29 +347,35 @@ def _build_reset_link(token: str) -> str:
     return f"{base}#reset?token={token}"
 
 
-def _store_reset_code(user_id: int) -> Tuple[str, str]:
-    contacts = get_client_for_table("contacts")
+def _store_reset_code(table: str, user_id: int) -> Tuple[str, str]:
+    client = get_client_for_table(table)
     token = secrets.token_urlsafe(32)
     issued = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    contacts.table("contacts").update({
+    client.table(table).update({
         RESET_CODE_FIELD: token,
         RESET_TIME_FIELD: issued,
     }).eq("user_id", user_id).execute()
-    clear_cache("contacts")
+    clear_cache(table)
     return token, issued
 
 
 def _resolve_user_by_token(token: str) -> Optional[dict]:
-    contacts = get_client_for_table("contacts")
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_name,user_phone,user_email,user_access,extra_access,{tg}".format(
-                tg=RECOVERY_CHAT_FIELD
-            )
-        ).eq("auth_tokens", token).gt("expires_at", _now_iso()).single().execute().data
-    except Exception:
-        row = None
-    return row
+    for table in LOGIN_TABLES:
+        client = get_client_for_table(table)
+        try:
+            res = client.table(table).select("*") \
+                .eq("auth_tokens", token).gt("expires_at", _now_iso()).execute()
+            rows = res.data or []
+            row = rows[0] if rows else None
+        except Exception:
+            row = None
+
+        if row:
+            row["user_table"] = table
+            if not row.get("user_access"):
+                row["user_access"] = _role_for_table(table)
+            return row
+    return None
 
 
 def _get_user_for_request() -> Optional[dict]:
@@ -355,41 +418,52 @@ def _send_tg_link_email(email: str, bot_link: str) -> None:
 
 
 def _get_reset_row(token: str) -> Tuple[Optional[dict], Optional[str]]:
-    contacts = get_client_for_table("contacts")
+    for table in LOGIN_TABLES:
+        client = get_client_for_table(table)
+        try:
+            res = client.table(table).select(
+                "user_id,user_email,user_name,{code},{ts}".format(
+                    code=RESET_CODE_FIELD,
+                    ts=RESET_TIME_FIELD,
+                )
+            ).eq(RESET_CODE_FIELD, token).execute()
+            rows = res.data or []
+            row = rows[0] if rows else None
+        except Exception:
+            row = None
+
+        if not row:
+            continue
+
+        if not row.get(RESET_CODE_FIELD):
+            continue
+
+        issued = _parse_timestamp(row.get(RESET_TIME_FIELD))
+        if not issued:
+            continue
+
+        expires_at = issued + dt.timedelta(minutes=RESET_TOKEN_TTL_MIN)
+        if expires_at <= _utcnow():
+            return None, "expired"
+
+        row["user_table"] = table
+        if not row.get("user_access"):
+            row["user_access"] = _role_for_table(table)
+        return row, None
+
+    return None, "invalid"
+
+
+def _clear_reset_code(user_id: int, table: str) -> None:
+    client = get_client_for_table(table)
     try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,{code},{ts}".format(
-                code=RESET_CODE_FIELD,
-                ts=RESET_TIME_FIELD,
-            )
-        ).eq(RESET_CODE_FIELD, token).single().execute().data
-    except Exception:
-        return None, "invalid"
-
-    if not row or not row.get(RESET_CODE_FIELD):
-        return None, "invalid"
-
-    issued = _parse_timestamp(row.get(RESET_TIME_FIELD))
-    if not issued:
-        return None, "invalid"
-
-    expires_at = issued + dt.timedelta(minutes=RESET_TOKEN_TTL_MIN)
-    if expires_at <= _utcnow():
-        return None, "expired"
-
-    return row, None
-
-
-def _clear_reset_code(user_id: int) -> None:
-    contacts = get_client_for_table("contacts")
-    try:
-        contacts.table("contacts").update({
+        client.table(table).update({
             RESET_CODE_FIELD: None,
             RESET_TIME_FIELD: None,
         }).eq("user_id", user_id).execute()
     except Exception as exc:
         log.warning("Не вдалося очистити код відновлення user_id=%s: %s", user_id, exc)
-    clear_cache("contacts")
+    clear_cache(table)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -447,48 +521,76 @@ def join():
     b = request.get_json(silent=True) or {}
     email = (b.get("email") or b.get("user_email") or "").strip().lower()
     pwd   =  (b.get("password") or b.get("pass_email") or "")
+    target_table = (b.get("target_table") or "").strip()
+    target_user_id = b.get("target_user_id")
 
     if not email or not pwd:
         return _fail_invalid()
 
-    contacts = get_client_for_table("contacts")
-
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,user_phone,user_access,extra_access,pass_email,{tg}".format(
-                tg=RECOVERY_CHAT_FIELD
-            )
-        ).eq("user_email", email).single().execute().data
-    except Exception:
-        row = None
-
-    if not row:
+    accounts = _find_accounts_by_email(email)
+    if not accounts:
         log.info("login fail (no user): %s", _mask_email(email))
         return _fail_invalid()
 
-    stored = row.get("pass_email") or ""
-    if not _check_pwd(pwd, stored):
+    matched: List[dict] = []
+    for acc in accounts:
+        row = acc["row"]
+        table = acc["table"]
+        stored = row.get("pass_email") or ""
+        if not _check_pwd(pwd, stored):
+            continue
+
+        if not _is_bcrypt_hash(stored):
+            try:
+                new_hash = hash_password(pwd)
+                client = get_client_for_table(table)
+                client.table(table).update({"pass_email": new_hash}).eq("user_id", row["user_id"]).execute()
+                row["pass_email"] = new_hash
+            except Exception as exc:
+                log.warning(
+                    "Не вдалося оновити пароль до bcrypt для user_id=%s у %s: %s",
+                    row.get("user_id"), table, exc,
+                )
+
+        matched.append(acc)
+
+    if target_table and target_user_id is not None:
+        target = next(
+            (acc for acc in matched
+             if acc.get("table") == target_table and str(acc.get("row", {}).get("user_id")) == str(target_user_id)),
+            None,
+        )
+        if not target:
+            return _fail_invalid()
+        matched = [target]
+
+    if not matched:
         log.info("login fail (bad pwd): %s", _mask_email(email))
         return _fail_invalid()
 
-    if not _is_bcrypt_hash(stored):
-        try:
-            new_hash = hash_password(pwd)
-            contacts.table("contacts").update({"pass_email": new_hash}).eq("user_id", row["user_id"]).execute()
-            row["pass_email"] = new_hash
-        except Exception as exc:
-            log.warning("Не вдалося оновити пароль до bcrypt для user_id=%s: %s", row.get("user_id"), exc)
+    if len(matched) > 1:
+        return jsonify(
+            choose_profile=True,
+            message="Хто ви зараз? Оберіть профіль для входу.",
+            profiles=_profiles_from_accounts(matched),
+        ), 200
+
+    account = matched[0]
+    table = account["table"]
+    row = account["row"]
+    client = get_client_for_table(table)
 
     try:
-        token, _ = _issue_session(contacts, row["user_id"])
+        token, _ = _issue_session(client, row["user_id"], table)
     except Exception as e:
         body = {"error":"server_error", "message":"Не вдалося видати сесію"}
-        if DEBUG_ERRORS: body["detail"] = str(e)
-        log.error("set auth token failed for user_id=%s: %s", row.get("user_id"), e)
+        if DEBUG_ERRORS:
+            body["detail"] = str(e)
+        log.error("set auth token failed for user_id=%s (%s): %s", row.get("user_id"), table, e)
         return jsonify(body), 500
 
-    payload = _payload_from_row(row)
-    resp = make_response(jsonify(ok=True, need_tg_setup=payload["need_tg_setup"]))
+    payload = _payload_from_row(row, table)
+    resp = make_response(jsonify(ok=True, need_tg_setup=payload["need_tg_setup"], user_table=table))
     return _set_cookie(resp, token)
 
 
@@ -516,13 +618,14 @@ def me():
 @bp.post("/logout")
 def logout():
     token = request.cookies.get(COOKIE_NAME)
-    contacts = get_client_for_table("contacts")
     if token:
-        try:
-            contacts.table("contacts").update({"auth_tokens": None, "expires_at": None}) \
-                    .eq("auth_tokens", token).execute()
-        except Exception as e:
-            log.info("logout token clear failed: %s", e)
+        for table in LOGIN_TABLES:
+            client = get_client_for_table(table)
+            try:
+                client.table(table).update({"auth_tokens": None, "expires_at": None}) \
+                        .eq("auth_tokens", token).execute()
+            except Exception as e:
+                log.info("logout token clear failed for %s: %s", table, e)
     resp = make_response(jsonify(ok=True))
     resp.set_cookie(COOKIE_NAME, "", path="/", max_age=0,
                     httponly=True, secure=COOKIE_SECURE, samesite="Lax")
@@ -536,20 +639,35 @@ def logout():
 def forgot_password():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
+    target_table = (data.get("target_table") or "").strip()
+    target_user_id = data.get("target_user_id")
 
     if not EMAIL_RX.match(email):
         return jsonify(message=FORGOT_GENERIC_MSG), 200
 
-    contacts = get_client_for_table("contacts")
-    try:
-        row = contacts.table("contacts").select(
-            "user_id,user_email,user_name,{tg}".format(tg=RECOVERY_CHAT_FIELD)
-        ).eq("user_email", email).single().execute().data
-    except Exception:
-        row = None
-
-    if not row:
+    accounts = _find_accounts_by_email(email)
+    if not accounts:
         return jsonify(message=FORGOT_GENERIC_MSG), 200
+
+    if target_table and target_user_id is not None:
+        accounts = [
+            acc for acc in accounts
+            if acc.get("table") == target_table
+            and str(acc.get("row", {}).get("user_id")) == str(target_user_id)
+        ]
+
+    if not accounts:
+        return jsonify(message=FORGOT_GENERIC_MSG), 200
+
+    if len(accounts) > 1:
+        return jsonify(
+            choose_profile=True,
+            message="Оберіть профіль, для якого потрібно відновити пароль.",
+            profiles=_profiles_from_accounts(accounts),
+        ), 200
+
+    account = accounts[0]
+    row = account["row"]
 
     allow_tg, allow_email = _get_recovery_toggles()
 
@@ -572,7 +690,7 @@ def forgot_password():
             msg = FORGOT_UNAVAILABLE_MSG
         return jsonify(message=msg), 200
 
-    token, _ = _store_reset_code(row["user_id"])
+    token, _ = _store_reset_code(account["table"], row["user_id"])
     link = _build_reset_link(token)
 
     try:
@@ -615,20 +733,20 @@ def reset_password():
     if not row:
         message = RESET_LINK_EXPIRED_MSG if reason == "expired" else RESET_LINK_INVALID_MSG
         return jsonify(error="invalid_token", message=message), 400
-
-    contacts = get_client_for_table("contacts")
+    table = row.get("user_table") or "contacts"
+    client = get_client_for_table(table)
     pass_hash = hash_password(new_password)
 
     try:
-        contacts.table("contacts").update({"pass_email": pass_hash}).eq("user_id", row["user_id"]).execute()
+        client.table(table).update({"pass_email": pass_hash}).eq("user_id", row["user_id"]).execute()
     except Exception as exc:
-        log.error("reset password update failed user_id=%s: %s", row["user_id"], exc)
+        log.error("reset password update failed user_id=%s (%s): %s", row["user_id"], table, exc)
         return jsonify(error="server_error", message="Не вдалося оновити пароль"), 500
 
-    _clear_reset_code(row["user_id"])
+    _clear_reset_code(row["user_id"], table)
 
     try:
-        token_value, _ = _issue_session(contacts, row["user_id"])
+        token_value, _ = _issue_session(client, row["user_id"], table)
     except Exception:
         token_value = None
 
