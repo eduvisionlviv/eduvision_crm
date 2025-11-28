@@ -16,24 +16,11 @@ _databases = None
 
 # === ЗМІННІ СЕРЕДОВИЩА ===
 ENV_PROJECT_ID = "appwriteprojectid"
-ALT_PROJECT_IDS = ("APPWRITE_PROJECT_ID", "APPWRITE_PROJECTID", "APPWRITE_PROJECT")
-
 ENV_API_KEY    = "appwritepadmin"
-ALT_API_KEYS   = ("APPWRITE_API_KEY", "APPWRITE_APIKEY", "APPWRITE_SECRET", "APPWRITE_KEY")
-
 ENV_DB_ID      = "appwritedatabaseid"
-ALT_DB_IDS     = ("APPWRITE_DATABASE_ID", "APPWRITE_DATABASEID", "APPWRITE_DB_ID", "APPWRITE_DBID")
-
 ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
-ALT_ENDPOINTS  = ("APPWRITE_API_ENDPOINT", "APPWRITE_HOST")
 
-def _get_env_value(primary: str, *fallbacks: str, default: str = None) -> str:
-    for name in (primary, *fallbacks):
-        val = os.getenv(name)
-        if val: return val
-    return default
-
-# === МАПІНГ ТАБЛИЦЬ ===
+# === 1. МАПІНГ ТАБЛИЦЬ ===
 TABLE_MAPPING = {
     "contacts": "contacts",
     "register": "register",
@@ -48,23 +35,27 @@ TABLE_MAPPING = {
     "black_list": "black_list"
 }
 
-# === МАПІНГ ПОЛІВ ===
-# Зліва: назва в коді Python -> Справа: Key (стовпець) в Appwrite (згідно ваших скріншотів)
+# === 2. МАПІНГ ПОЛІВ ===
 FIELD_MAPPING = {
-    # --- Загальні поля (contacts + register) ---
-    "user_email": "user_email",
-    "user_name":  "user_name",
-    "pass_email": "pass_email",
-    "user_phone": "user_phone",
-
-    # --- Специфічні для contacts (image_09f603.png) ---
-    "user_access":    "role",          # Код user_access -> База role
-    "user_id":        "userId",        # Код user_id -> База userId
-    "is_active":      "isActive",      # Код is_active -> База isActive
-    "last_login":     "lastLogin",     # Код last_login -> База lastLogin
-    "recovery_tg_id": "user_tg_id",    # Код recovery_tg_id -> База user_tg_id
+    # --- CONTACTS (user_admin) ---
+    "user_name":      "username",      # Код -> База
+    "user_access":    "role",
+    "user_id":        "userId",
+    "recovery_tg_id": "user_tg_id",    # Ваше нове поле
+    "is_active":      "isActive",
+    "last_login":     "lastLogin",
+    
+    # Поля, що збігаються
+    "user_email":     "user_email",
+    "pass_email":     "pass_email",
+    "user_phone":     "user_phone",
+    "user_tg_id":     "user_tg_id",
     "auth_tokens":    "auth_tokens",
     "expires_at":     "expires_at",
+
+    # Поля для відновлення паролю (якщо додасте їх в базу)
+    "recovery_code":  "recovery_code", 
+    "password_resets_time": "password_resets_time",
 
     # --- CRM ---
     "full_name": "fullName",
@@ -102,9 +93,9 @@ def _get_services():
     global _client, _databases
     if _databases: return _databases
 
-    ep = _get_env_value(ENV_ENDPOINT, *ALT_ENDPOINTS, default="https://cloud.appwrite.io/v1")
-    pid = _get_env_value(ENV_PROJECT_ID, *ALT_PROJECT_IDS)
-    key = _get_env_value(ENV_API_KEY, *ALT_API_KEYS)
+    ep = os.getenv(ENV_ENDPOINT, "https://cloud.appwrite.io/v1")
+    pid = os.getenv(ENV_PROJECT_ID) or os.getenv("APPWRITE_PROJECT_ID")
+    key = os.getenv(ENV_API_KEY) or os.getenv("APPWRITE_API_KEY")
 
     if not (pid and key):
         log.error("❌ Appwrite credentials missing!")
@@ -130,7 +121,7 @@ def _map_output(doc):
 class AppwriteAdapter:
     def __init__(self, table_name=None):
         self.db = _get_services()
-        self.db_id = _get_env_value(ENV_DB_ID, *ALT_DB_IDS)
+        self.db_id = os.getenv(ENV_DB_ID) or os.getenv("APPWRITE_DATABASE_ID")
         self.table_name = TABLE_MAPPING.get(table_name, table_name)
         self.queries = []
         self.payload = None
@@ -180,9 +171,7 @@ class AppwriteAdapter:
         return self
 
     def execute(self):
-        if not self.db_id or not self.db:
-            log.error("❌ DB not configured")
-            return type('R', (), {"data": None})
+        if not self.db_id: return type('R', (), {"data": None})
 
         try:
             if self.op == 'insert':
@@ -196,8 +185,7 @@ class AppwriteAdapter:
                 return type('R', (), {"data": [_map_output(d) for d in updated]})
 
             if self.op == 'delete':
-                for d in docs:
-                    self.db.delete_document(self.db_id, self.table_name, d['$id'])
+                for d in docs: self.db.delete_document(self.db_id, self.table_name, d['$id'])
                 return type('R', (), {"data": True})
 
             data = [_map_output(d) for d in docs]
@@ -205,7 +193,7 @@ class AppwriteAdapter:
             return type('R', (), {"data": final})
 
         except Exception as e:
-            log.error(f"⚠️ Appwrite [{self.table_name}]: {e}")
+            log.error(f"⚠️ DB Error [{self.table_name}]: {e}")
             return type('R', (), {"data": None})
 
 def get_client_for_table(name=None):
