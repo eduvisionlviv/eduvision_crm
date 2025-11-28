@@ -23,7 +23,14 @@ ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
 TABLE_MAPPING = {
     "contacts": "user_admin",  # Код шукає 'contacts', а йдемо в 'user_admin'
     "register": "register",    # Для заявок (якщо немає, створіть або замініть на іншу)
-    "uni_base": "uni_base"
+    "uni_base": "uni_base",
+    # CRM модулі
+    "students": "crm_students",
+    "parents": "crm_parents",
+    "courses": "crm_courses",
+    "enrollments": "crm_enrollments",
+    "payments": "crm_payments",
+    "bank_keys": "crm_bank_keys",
 }
 
 # === МАПІНГ ПОЛІВ (Код <-> Appwrite) ===
