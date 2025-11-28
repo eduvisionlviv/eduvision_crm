@@ -59,6 +59,7 @@
     <div class="btn-box">
       <button id="loginBtn" class="btn btn--blue btn--md">Вхід</button>
       <button id="regBtn"   class="btn btn--green btn--md">Реєстрація</button>
+      <button id="refreshBtn" class="btn btn--gray btn--md hide">Оновити сторінку</button>
     </div>
 
     <form id="loginForm" class="form card hide" autocomplete="on" novalidate>
@@ -93,10 +94,16 @@
 
     const loginForm = document.getElementById("loginForm"),
           regForm   = document.getElementById("regForm"),
-          resetForm = document.getElementById("resetForm");
+          resetForm = document.getElementById("resetForm"),
+          refreshBtn = document.getElementById("refreshBtn");
 
     document.getElementById("loginBtn").onclick = () => show(loginForm);
     document.getElementById("regBtn").onclick   = () => show(regForm);
+    refreshBtn.onclick = () => location.reload();
+
+    function showRefresh(){
+      refreshBtn.classList.remove("hide");
+    }
 
     function show(el){
       [loginForm, regForm, resetForm].forEach(f => f.classList.add("hide"));
@@ -162,6 +169,7 @@
           return alert(d.message || d.error || "❌ Помилка");
         }
         alert(d.message || "Заявку прийнято. Очікуйте підтвердження.");
+        showRefresh();
         regForm.reset(); show(loginForm);
       }catch{ alert("⚠️ Сервер недоступний"); }
     };
@@ -184,6 +192,7 @@
           if(confirm("Режим DEBUG: відкрити посилання на скидання пароля?")) location.href=d.debug_link;
         }
         alert(d.message || "Якщо акаунт існує — ми надішлемо інструкції на email/Telegram.");
+        showRefresh();
       }catch{ alert("⚠️ Сервер недоступний"); }
     }
 
