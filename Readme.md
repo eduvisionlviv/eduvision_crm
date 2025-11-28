@@ -23,6 +23,26 @@
 - `crm_payments`
 - `crm_bank_keys`
 
+### Колекція користувачів (`contacts` → `user_admin`)
+Щоб авторизація, скидання пароля та перевірки ролей працювали, у колекції `user_admin`
+мають бути поля:
+
+- `email` (`string`) — логін/пошта користувача.
+- `passwordHash` (`string`) — збережений пароль або hash.
+- `username` (`string`) — відображуване ім’я.
+- `role` (`string`) — роль у CRM.
+- `useradminId` (`string` або `int`) — внутрішній ID.
+- `user_phone` (`string`) — номер телефону (для Telegram-прив’язки).
+- `auth_tokens` (`string`) — останній виданий токен сесії.
+- `expires_at` (`datetime`) — термін дії токена `edu_session`.
+- `recovery_tg_id` (`string`) — ID Telegram для відновлення.
+- `recovery_code` (`string`) — одноразовий код для скидання пароля.
+- `password_resets_time` (`datetime`) — час видачі коду.
+
+Усі текстові поля можна залишати як `string`, а час бажано зберігати у форматі
+`datetime` Appwrite (ISO 8601, UTC). Без цих полів `/api/login/join` не зможе
+видавати куку `edu_session` та перевіряти авторизацію.
+
 ## API: `/api/crm`
 | Метод | Шлях | Призначення | Доступ |
 |-------|------|-------------|--------|
