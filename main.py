@@ -67,6 +67,20 @@ def load_api(app: Flask, folder: str = "api"):
 load_module_apis(app)
 load_api(app)
 
+# Перевірка, що критичні API піднялися. Якщо ні — валимося одразу,
+# щоб не отримувати малозрозумілий 405 Method Not Allowed замість POST /api/login/join
+# (це стається, якщо api/login/join.py не завантажився через помилки чи залежності).
+def _assert_route(rule: str, method: str) -> None:
+    for r in app.url_map.iter_rules():
+        if r.rule == rule and method.upper() in (r.methods or set()):
+            return
+    raise RuntimeError(
+        f"Маршрут {rule} для {method} не зареєстровано. Перевірте логи завантаження API"
+    )
+
+
+_assert_route("/api/login/join", "POST")
+
 # ─────────────── Routes (Маршрутизація сайту)
 @app.route("/")
 def root():
