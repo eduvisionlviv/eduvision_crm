@@ -72,11 +72,11 @@ TABLE_MAPPING = {
 FIELD_MAPPING = {
     # ── Логін / admin users (user_admin)
     "user_email":    "email",
-    "pass_email":    "passwordhash",
+    "pass_email":    "passwordHash",
     "user_name":     "username",
     "user_access":   "role",
     "user_id":       "useradminId",
-    "user_phone":    "phoneNumber",
+    "user_phone":    "user_phone",
     "auth_tokens":   "auth_tokens",
     "expires_at":    "expires_at",
     "recovery_tg_id": "recovery_tg_id",
