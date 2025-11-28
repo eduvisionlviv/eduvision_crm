@@ -1,6 +1,7 @@
 flask
 Flask-Cors
 flask[async]
+supabase
 httpx
 bcrypt
 python-telegram-bot
@@ -10,4 +11,3 @@ cryptography
 apscheduler
 playwright
 gunicorn
-appwrite
