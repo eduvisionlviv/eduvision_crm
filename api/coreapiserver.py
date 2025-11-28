@@ -28,55 +28,44 @@ ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
 ALT_ENDPOINTS  = ("APPWRITE_API_ENDPOINT", "APPWRITE_HOST")
 
 def _get_env_value(primary: str, *fallbacks: str, default: str = None) -> str:
-    """Отримує значення першої знайденої змінної середовища."""
     for name in (primary, *fallbacks):
         val = os.getenv(name)
         if val: return val
     return default
 
-# === МАПІНГ ТАБЛИЦЬ (Код -> Appwrite) ===
+# === МАПІНГ ТАБЛИЦЬ ===
 TABLE_MAPPING = {
-    # Основні (з ваших скріншотів)
-    "contacts": "contacts",       # ID таблиці: contacts
-    "register": "register",       # ID таблиці: register
-    
-    # CRM (стандартні)
+    "contacts": "contacts",
+    "register": "register",
     "students": "crm_students",
     "parents": "crm_parents",
     "courses": "crm_courses",
     "enrollments": "crm_enrollments",
     "payments": "crm_payments",
     "bank_keys": "crm_bank_keys",
-    
-    # Системні
     "uni_base": "uni_base",
     "scheduled_tasks": "scheduled_tasks",
     "black_list": "black_list"
 }
 
-# === МАПІНГ ПОЛІВ (Код -> Appwrite Columns) ===
+# === МАПІНГ ПОЛІВ ===
+# Зліва: назва в коді Python -> Справа: Key (стовпець) в Appwrite (згідно ваших скріншотів)
 FIELD_MAPPING = {
-    # --- Таблиця CONTACTS ---
-    # Змінна в коді  ->  Ваша колонка в базі
-    "user_name":      "username",
-    "user_access":    "role",
-    "user_id":        "userId",
-    "recovery_tg_id": "user_tg_id",
-    
-    # Поля, назви яких збігаються (для надійності)
-    "user_email":     "user_email",
-    "pass_email":     "pass_email",
-    "user_phone":     "user_phone",
-    
-    # Поля сесії (ОБОВ'ЯЗКОВО СТВОРИТИ В APPWRITE)
+    # --- Загальні поля (contacts + register) ---
+    "user_email": "user_email",
+    "user_name":  "user_name",
+    "pass_email": "pass_email",
+    "user_phone": "user_phone",
+
+    # --- Специфічні для contacts (image_09f603.png) ---
+    "user_access":    "role",          # Код user_access -> База role
+    "user_id":        "userId",        # Код user_id -> База userId
+    "is_active":      "isActive",      # Код is_active -> База isActive
+    "last_login":     "lastLogin",     # Код last_login -> База lastLogin
+    "recovery_tg_id": "user_tg_id",    # Код recovery_tg_id -> База user_tg_id
     "auth_tokens":    "auth_tokens",
     "expires_at":     "expires_at",
 
-    # --- Таблиця REGISTER ---
-    # (Тут назви збігаються, додатковий мапінг не потрібен, але хай буде)
-    "username":       "user_name",
-    "passwordHash":   "pass_email",
-    
     # --- CRM ---
     "full_name": "fullName",
     "birth_date": "birthDate",
@@ -127,12 +116,10 @@ def _get_services():
     return _databases
 
 def _map_input(data):
-    """Конвертує ключі: Python -> Appwrite"""
     if not data: return data
     return {FIELD_MAPPING.get(k, k): v for k, v in data.items()}
 
 def _map_output(doc):
-    """Конвертує ключі: Appwrite -> Python"""
     if not doc: return None
     new_doc = doc.copy()
     for db_k, v in doc.items():
@@ -142,95 +129,79 @@ def _map_output(doc):
 
 class AppwriteAdapter:
     def __init__(self, table_name=None):
-        self.db_service = _get_services()
+        self.db = _get_services()
         self.db_id = _get_env_value(ENV_DB_ID, *ALT_DB_IDS)
         self.table_name = TABLE_MAPPING.get(table_name, table_name)
         self.queries = []
-        self.data_payload = None
-        self.op_type = None
-        self.is_single = False
+        self.payload = None
+        self.op = None
+        self.single_doc = False
 
     def table(self, name):
         self.table_name = TABLE_MAPPING.get(name, name)
         return self
 
-    def select(self, columns="*"):
-        self.op_type = 'select'
+    def select(self, cols="*"):
+        self.op = 'select'
         return self
 
-    def eq(self, column, value):
-        real_col = FIELD_MAPPING.get(column, column)
-        self.queries.append(Query.equal(real_col, value))
+    def eq(self, col, val):
+        self.queries.append(Query.equal(FIELD_MAPPING.get(col, col), val))
         return self
     
-    def gt(self, column, value):
-        real_col = FIELD_MAPPING.get(column, column)
-        self.queries.append(Query.greater_than(real_col, value))
+    def gt(self, col, val):
+        self.queries.append(Query.greater_than(FIELD_MAPPING.get(col, col), val))
         return self
 
-    # ✅ Додано для TaskScheduler
-    def lte(self, column, value):
-        real_col = FIELD_MAPPING.get(column, column)
-        self.queries.append(Query.less_than_equal(real_col, value))
+    def lte(self, col, val):
+        self.queries.append(Query.less_than_equal(FIELD_MAPPING.get(col, col), val))
         return self
 
     def single(self):
-        self.is_single = True
+        self.single_doc = True
         return self
 
     def insert(self, data):
-        self.op_type = 'insert'
-        self.data_payload = _map_input(data)
+        self.op = 'insert'
+        self.payload = _map_input(data)
         return self
 
     def update(self, data):
-        self.op_type = 'update'
-        self.data_payload = _map_input(data)
+        self.op = 'update'
+        self.payload = _map_input(data)
         return self
     
     def delete(self):
-        self.op_type = 'delete'
+        self.op = 'delete'
         return self
     
-    def in_(self, column, values):
-        real_col = FIELD_MAPPING.get(column, column)
-        self.queries.append(Query.contains(real_col, values))
+    def in_(self, col, vals):
+        self.queries.append(Query.contains(FIELD_MAPPING.get(col, col), vals))
         return self
 
     def execute(self):
-        if not self.db_id or not self.db_service:
+        if not self.db_id or not self.db:
             log.error("❌ DB not configured")
             return type('R', (), {"data": None})
 
         try:
-            if self.op_type == 'insert':
-                res = self.db_service.create_document(
-                    self.db_id, self.table_name, ID.unique(), self.data_payload
-                )
+            if self.op == 'insert':
+                res = self.db.create_document(self.db_id, self.table_name, ID.unique(), self.payload)
                 return type('R', (), {"data": _map_output(res)})
 
-            # Select for Update/Delete/List
-            docs = self.db_service.list_documents(
-                self.db_id, self.table_name, queries=self.queries
-            )['documents']
+            docs = self.db.list_documents(self.db_id, self.table_name, queries=self.queries)['documents']
 
-            if self.op_type == 'update':
-                updated = []
-                for d in docs:
-                    upd = self.db_service.update_document(
-                        self.db_id, self.table_name, d['$id'], self.data_payload
-                    )
-                    updated.append(_map_output(upd))
-                return type('R', (), {"data": updated})
+            if self.op == 'update':
+                updated = [self.db.update_document(self.db_id, self.table_name, d['$id'], self.payload) for d in docs]
+                return type('R', (), {"data": [_map_output(d) for d in updated]})
 
-            if self.op_type == 'delete':
+            if self.op == 'delete':
                 for d in docs:
-                    self.db_service.delete_document(self.db_id, self.table_name, d['$id'])
+                    self.db.delete_document(self.db_id, self.table_name, d['$id'])
                 return type('R', (), {"data": True})
 
-            # Select Result
             data = [_map_output(d) for d in docs]
-            final = data[0] if (self.is_single and data) else data
+            final = data[0] if (self.single_doc and data) else data
             return type('R', (), {"data": final})
 
         except Exception as e:
