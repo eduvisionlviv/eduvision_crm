@@ -2,201 +2,118 @@
 from flask import Blueprint, request, jsonify
 from api.coreapiserver import get_client_for_table, clear_cache
 from api.login.join import hash_password
-import os, secrets, datetime as dt, logging
+import secrets
+import logging
+import datetime as dt
 
 bp = Blueprint("reg_user", __name__, url_prefix="/api")
 log = logging.getLogger("reg.users")
 
-AUTH_TTL_HOURS = int(os.getenv("AUTH_TTL_HOURS", "168"))
-
-def _exp_iso():
-    return (dt.datetime.utcnow() + dt.timedelta(hours=AUTH_TTL_HOURS)) \
-           .replace(microsecond=0).isoformat() + "+00:00"
-
-
-def _delete_register_row(register_client, row_id, user_email) -> bool:
-    """
-    Надійне видалення заявки з register:
-      1) пробуємо delete by id;
-      2) перевіряємо, чи зник;
-      3) якщо ні — delete by user_email (на випадок type-місмеча id);
-      4) фінальна перевірка.
-    Повертає True, якщо запис відсутній після спроб.
-    """
-    # 1) delete by id
-    try:
-        register_client.table("register").delete().eq("id", row_id).execute()
-    except Exception as e:
-        log.warning("reject: delete by id failed (id=%s): %s", row_id, e)
-
-    # перевірка
-    try:
-        still = register_client.table("register").select("id").eq("id", row_id).execute().data
-    except Exception as e:
-        log.warning("reject: recheck by id failed (id=%s): %s", row_id, e)
-        still = None
-
-    if not still:
-        return True  # зник
-
-    # 2) fallback: delete by email
-    try:
-        register_client.table("register").delete().eq("user_email", user_email).execute()
-    except Exception as e:
-        log.error("reject: delete by email failed (%s): %s", user_email, e)
-
-    # фінальна перевірка
-    try:
-        still2 = register_client.table("register").select("id").eq("user_email", user_email).execute().data
-    except Exception as e:
-        log.warning("reject: recheck by email failed (%s): %s", user_email, e)
-        still2 = None
-
-    return not bool(still2)
-
-
 @bp.post("/reg_user")
 def reg_user():
     """
-    approve: перенос із `register` → `contacts`; паролі одразу зберігаємо у вигляді bcrypt-хешу.
-             auto_login=true → видати auth_tokens + expires_at.
-
-    reject : додати email у `black_list` (user_email, user_name, user_phone, data) і видалити заявку з `register`.
+    approve: Створює користувача в contacts (заповнюючи всі обов'язкові поля) і видаляє заявку.
+    reject:  Додає email в black_list (якщо таблиця є) і видаляє заявку.
     """
     data = request.json or {}
-    action = (data.get("action") or "").lower()
+    action = data.get("action")
     row_id = data.get("id")
-    auto_login = bool(data.get("auto_login"))
 
-    if action not in ("approve", "reject"):
-        return jsonify({"error": "action must be approve | reject"}), 400
-    if row_id is None:
-        return jsonify({"error": "id is required"}), 400
+    if not row_id or action not in ("approve", "reject"):
+        return jsonify(error="invalid_args"), 400
 
     contacts = get_client_for_table("contacts")
     register = get_client_for_table("register")
+    black_list = get_client_for_table("black_list")
 
-    # ───────────────────────── reject ─────────────────────────
-    if action == "reject":
-        try:
-            reg_row = register.table("register").select(
-                "id,user_email,user_name,user_phone"
-            ).eq("id", row_id).single().execute().data
-        except Exception as e:
-            log.error("reject: register read failed (id=%s): %s", row_id, e)
-            return jsonify({"error": "register read failed"}), 500
-
-        if not reg_row:
-            return jsonify({"error": "register row not found"}), 404
-
-        user_email = (reg_row.get("user_email") or "").strip().lower()
-        user_name  = (reg_row.get("user_name")  or "").strip()
-        user_phone = (reg_row.get("user_phone") or "").strip()
-
-        bl = get_client_for_table("black_list")
-
-        # перевірка, чи вже у блеклісті
-        try:
-            exists_bl = bl.table("black_list").select("user_id").eq("user_email", user_email).execute().data
-        except Exception as e:
-            log.warning("reject: blacklist check failed for %s: %s", user_email, e)
-            exists_bl = None
-
-        if not exists_bl:
-            payload_main = {
-                "user_email": user_email,
-                "user_name":  user_name,
-                "user_phone": user_phone,
-                "data":       dt.datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00",
-            }
-            try:
-                bl.table("black_list").insert(payload_main).execute()
-            except Exception as e1:
-                log.info("reject: insert with data failed, retrying without data: %s", e1)
-                try:
-                    payload_fallback = {k: v for k, v in payload_main.items() if k != "data"}
-                    bl.table("black_list").insert(payload_fallback).execute()
-                except Exception as e2:
-                    log.error("reject: blacklist insert failed for %s: %s", user_email, e2)
-                    return jsonify({"error": "blacklist insert failed"}), 500
-
-        # гарантоване видалення заявки з register
-        deleted = _delete_register_row(register, row_id, user_email)
-        clear_cache("black_list")
-        clear_cache("register")
-
-        if not deleted:
-            log.warning("reject: register row STILL PRESENT (id=%s, email=%s)", row_id, user_email)
-            return jsonify({
-                "status": "partial",
-                "action": "reject",
-                "warning": "blacklisted, but register row not deleted"
-            }), 200
-
-        return jsonify({"status": "ok", "action": "reject"}), 200
-
-    # ───────────────────────── approve ─────────────────────────
+    # 1. Отримуємо заявку з register
     try:
-        reg_row = register.table("register").select(
-            "id,user_email,user_name,user_phone,pass_email"
-        ).eq("id", row_id).single().execute().data
+        # Шукаємо по $id (системний ID Appwrite)
+        reg_row = register.table("register").select("*").eq("$id", row_id).single().execute().data
+        if not reg_row:
+            # Фолбек: іноді фронт шле старий ID, пробуємо знайти по кастомному полю, якщо воно є
+            reg_row = register.table("register").select("*").eq("id", row_id).single().execute().data
     except Exception as e:
-        log.error("approve: register read failed (id=%s): %s", row_id, e)
-        return jsonify({"error": "register read failed"}), 500
+        log.error(f"Read register failed: {e}")
+        return jsonify(error="read_failed"), 500
 
     if not reg_row:
-        return jsonify({"error": "register row not found"}), 404
+        return jsonify(error="not_found"), 404
 
-    user_email = (reg_row.get("user_email") or "").strip().lower()
-    user_name  = (reg_row.get("user_name")  or "").strip()
-    user_phone = (reg_row.get("user_phone") or "").strip()
-    pass_raw   = (reg_row.get("pass_email") or "").strip()
+    email = reg_row.get("user_email")
+    name = reg_row.get("user_name")
+    phone = reg_row.get("user_phone")
 
-    # дубль у contacts?
-    try:
-        exists = contacts.table("contacts").select("user_id").eq("user_email", user_email).execute().data
-    except Exception as e:
-        log.error("approve: contacts duplicate check failed: %s", e)
-        exists = None
-    if exists:
-        # навіть при дублі намагаємось знести заявку
-        _delete_register_row(register, row_id, user_email)
-        clear_cache("register")
-        return jsonify({"error": "duplicate in contacts"}), 409
+    # ───────────────────────── REJECT (Відхилити) ─────────────────────────
+    if action == "reject":
+        # Спроба додати в Blacklist
+        try:
+            # Перевіряємо, чи вже там є
+            exists = black_list.table("black_list").select("user_email").eq("user_email", email).execute().data
+            if not exists:
+                black_list.table("black_list").insert({
+                    "user_email": email,
+                    "user_name": name,
+                    "user_phone": phone,
+                    "data": dt.datetime.utcnow().isoformat()
+                }).execute()
+        except Exception as e:
+            # Якщо таблиці немає або інша помилка — просто логуємо, але не ламаємо процес видалення
+            log.warning(f"Blacklist insert failed (maybe table missing?): {e}")
 
-    if pass_raw.startswith("$2"):
-        pass_store = pass_raw
-    else:
-        pass_store = hash_password(pass_raw)
+        # Видаляємо заявку
+        try:
+            register.table("register").delete().eq("$id", row_id).execute()
+        except Exception as e:
+            log.error(f"Register delete failed: {e}")
+            return jsonify(error="delete_failed"), 500
 
-    payload = {
-        "user_email":   user_email,
-        "user_name":    user_name,
-        "user_phone":   user_phone,
-        "user_access":  "def",
-        "extra_access": None,
-        "pass_email":   pass_store,
-    }
+        return jsonify(status="ok", action="reject")
 
-    if auto_login:
-        payload["auth_tokens"] = secrets.token_urlsafe(32)
-        payload["expires_at"]  = _exp_iso()
+    # ───────────────────────── APPROVE (Схвалити) ─────────────────────────
+    if action == "approve":
+        # Перевірка дублікатів в contacts
+        exists = contacts.table("contacts").select("user_id").eq("user_email", email).execute().data
+        if exists:
+            # Якщо юзер вже є, просто видаляємо заявку
+            register.table("register").delete().eq("$id", row_id).execute()
+            return jsonify(error="duplicate", message="Користувач вже існує"), 409
 
-    try:
-        ins = contacts.table("contacts").insert(payload).execute()
-        # після успішного переносу — гарантовано видаляємо заявку
-        _delete_register_row(register, row_id, user_email)
-        clear_cache("contacts"); clear_cache("register")
-
-        out = {
-            "status": "ok",
-            "action": "approve",
-            "created_id": (ins.data and (ins.data[0].get("user_id") or ins.data[0].get("id")))
+        # Підготовка даних для contacts (user_admin)
+        # ВАЖЛИВО: Заповнюємо всі REQUIRED поля з вашої таблиці
+        new_user_data = {
+            "user_email": email,
+            "user_name": name,
+            "user_phone": phone or "-",
+            "pass_email": reg_row.get("pass_email"),
+            
+            # Обов'язкові системні поля
+            "user_access": "student",        # role
+            "user_id": secrets.token_hex(8), # userId (унікальний рядок)
+            "is_active": True,               # isActive
+            "recovery_tg_id": "-",           # user_tg_id (заглушка)
+            "auth_tokens": "-",              # auth_tokens (заглушка)
+            # Необов'язкові, але корисні
+            "expires_at": None,
+            "last_login": None
         }
-        if auto_login:
-            out["auth_tokens"] = payload["auth_tokens"]
-            out["expires_at"]  = payload["expires_at"]
-        return jsonify(out), 200
-    except Exception as e:
-        log.error("approve failed (id=%s, email=%s): %s", row_id, user_email, e)
-        return jsonify({"error": "internal_error"}), 500
+
+        # Хешування паролю, якщо він прийшов "чистим"
+        pwd = new_user_data["pass_email"]
+        if pwd and not pwd.startswith("$2"):
+            new_user_data["pass_email"] = hash_password(pwd)
+
+        try:
+            # Створення користувача
+            res = contacts.table("contacts").insert(new_user_data).execute()
+            
+            if res.data:
+                # Успіх - видаляємо заявку з register
+                register.table("register").delete().eq("$id", row_id).execute()
+                clear_cache("contacts")
+                return jsonify(status="ok", created_id=res.data.get("user_id")), 200
+            else:
+                return jsonify(error="insert_failed"), 500
+        except Exception as e:
+            log.error(f"Approve failed: {e}")
+            return jsonify(error="server_error", detail=str(e)), 500
