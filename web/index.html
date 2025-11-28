@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Helen Doron English – Вхід / Реєстрація</title>
 
+  <!-- PWA -->
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#ffffff" />
 
+  <!-- Єдині стилі -->
   <link rel="stylesheet" href="/main/css/theme.css">
   <link rel="stylesheet" href="/main/css/buttons.css">
   <link rel="stylesheet" href="/main/css/inputs.css">
@@ -36,11 +38,11 @@
         if (r.ok) {
           const d = await r.json();
           const u = d.user || d;
-          localStorage.setItem("user_id",       u.user_id);
-          localStorage.setItem("user_name",     u.user_name);
-          localStorage.setItem("user_access",   u.user_access);
+          localStorage.setItem("user_id",      u.user_id);
+          localStorage.setItem("user_name",    u.user_name);
+          localStorage.setItem("user_access",  u.user_access);
           localStorage.setItem("extra_access", u.extra_access);
-          localStorage.setItem("user_role",     u.user_access);
+          localStorage.setItem("user_role",    u.user_access);
           location.href = "/main/main.html";
         }
         // 401 на сторінці логіну — очікувано, нічого не робимо.
@@ -61,6 +63,7 @@
       <button id="regBtn"   class="btn btn--green btn--md">Реєстрація</button>
     </div>
 
+    <!-- Форма входу -->
     <form id="loginForm" class="form card hide" autocomplete="on" novalidate>
       <input id="loginEmail" class="input" type="email" placeholder="Email" required autocomplete="username">
       <input id="loginPass"  class="input" type="password" placeholder="Пароль" required autocomplete="current-password">
@@ -70,6 +73,7 @@
       </div>
     </form>
 
+    <!-- Форма реєстрації -->
     <form id="regForm" class="form card hide" novalidate>
       <input id="regName"    class="input" type="text"  placeholder="Ім’я та прізвище" required>
       <input id="regEmail"   class="input" type="email" placeholder="Email" required>
@@ -81,6 +85,7 @@
       </div>
     </form>
 
+    <!-- Форма скидання пароля (за токеном) -->
     <form id="resetForm" class="form card hide" novalidate>
       <div class="muted" style="margin-bottom:8px">Встановіть новий пароль</div>
       <input id="resetPass" class="input" type="password" placeholder="Новий пароль (мін. 6)" required autocomplete="new-password">
