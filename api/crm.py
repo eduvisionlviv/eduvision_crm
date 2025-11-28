@@ -306,7 +306,11 @@ def list_bank_keys():
                 "provider": row.get("provider"),
                 "api_key_id": _safe_mask(row.get("api_key_id")),
                 "webhook_secret": _safe_mask(row.get("webhook_secret")),
-                "created_at": row.get("$createdAt") or row.get("created_at"),
+                "created_at": row.get("$createdAt")
+                               or row.get("created_at")
+                               or row.get("creation_date")
+                               or row.get("creationDate")
+                               or row.get("sCreatedAt"),
                 "created_by": row.get("created_by"),
             }
         )

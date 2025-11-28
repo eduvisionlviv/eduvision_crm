@@ -36,18 +36,66 @@ TABLE_MAPPING = {
 # === МАПІНГ ПОЛІВ (Код <-> Appwrite) ===
 # Ліворуч: як називає код (join.py). Праворуч: як у вас в базі (user_admin)
 FIELD_MAPPING = {
-    # Код            # Ваша база
+    # ── Логін / admin users (user_admin)
     "user_email":    "email",
-    "pass_email":    "passwordHash",
+    "pass_email":    "passwordhash",
     "user_name":     "username",
     "user_access":   "role",
     "user_id":       "useradminId",
-    "user_phone":    "user_phone",
+    "user_phone":    "phoneNumber",
     "auth_tokens":   "auth_tokens",
     "expires_at":    "expires_at",
     "recovery_tg_id": "recovery_tg_id",
     "recovery_code":  "recovery_code",
     "password_resets_time": "password_resets_time",
+
+    # ── CRM: учні
+    "full_name":    "fullName",
+    "birth_date":   "birthDate",
+    "parent_id":    "parentId",
+    "notes":        "notes",
+    "grade_level":  "gradeLevel",
+    "enrollment_date": "enrollmentDate",
+    "student_status":   "studentStatus",
+
+    # ── CRM: батьки
+    "phone":        "phone",
+    "email":        "email",
+    "preferred_contact_time": "preferredContactTime",
+    "number_of_children":    "numberOfChildren",
+
+    # ── CRM: курси
+    "age_from":     "ageFrom",
+    "age_to":       "ageTo",
+    "description":  "description",
+    "start_time":   "startTime",
+    "end_time":     "endTime",
+    "max_participants": "maxParticipants",
+
+    # ── CRM: записи на курс
+    "student_id":   "studentId",
+    "course_id":    "courseId",
+    "start_date":   "startDate",
+    "status":       "status",
+    "completion_date": "completionDate",
+
+    # ── CRM: оплати
+    "payment_id":   "paymentId",
+    "amount":       "amount",
+    "currency":     "currency",
+    "payment_type": "paymentType",
+    "period":       "period",
+    "comment":      "comment",
+    "payment_status": "status",
+
+    # ── CRM: банківські ключі
+    "provider":       "provider",
+    "api_key_id":     "apiKeyId",
+    "api_secret":     "apiSecret",
+    "webhook_secret": "webhookSecret",
+    "created_by":     "createdBy",
+    "creation_date":  "creationDate",
+    "updated_at":     "updatedAt",
 }
 
 # Створюємо зворотний словник для перекладу відповіді від бази
