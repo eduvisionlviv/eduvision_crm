@@ -44,6 +44,39 @@ FIELD_MAPPING = {
     "user_id":       "useradminId",
     # "user_phone":  "user_phone",   <-- Це поле треба додати в базу!
     # "auth_tokens": "auth_tokens",  <-- Це поле треба додати в базу!
+
+    # CRM: учні
+    "full_name": "fullName",
+    "birth_date": "birthDate",
+    "parent_id": "parentId",
+    "enrollment_date": "enrollmentDate",
+    "grade_level": "gradeLevel",
+    "student_status": "studentStatus",
+
+    # CRM: батьки
+    "api_key_id": "apiKeyId",
+    "api_secret": "apiSecret",
+    "webhook_secret": "webhookSecret",
+    "created_by": "createdBy",
+
+    # CRM: курси
+    "age_from": "ageFrom",
+    "age_to": "ageTo",
+    "start_time": "startTime",
+    "end_time": "endTime",
+    "max_participants": "maxParticipants",
+
+    # CRM: запис на курс
+    "student_id": "studentId",
+    "course_id": "courseId",
+    "start_date": "startDate",
+    "completion_date": "completionDate",
+
+    # CRM: оплати
+    "payment_type": "paymentType",
+    "payment_id": "paymentId",
+    "payment_method": "paymentMethod",
+    "payment_date": "paymentDate",
 }
 
 # Створюємо зворотний словник для перекладу відповіді від бази

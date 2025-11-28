@@ -101,6 +101,22 @@ def _augment_student(doc: dict) -> dict:
     return result
 
 
+def _validate_required_fields(data: dict, required_fields: Iterable[str]):
+    missing = []
+    for field in required_fields:
+        value = data.get(field)
+        if value is None:
+            missing.append(field)
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            missing.append(field)
+
+    if missing:
+        return jsonify(error="missing_fields", required=list(required_fields), missing=missing), 400
+
+    return None
+
+
 def _safe_mask(value: str) -> str:
     if not value:
         return ""
@@ -174,7 +190,23 @@ def create_student():
         "birth_date": payload.get("birth_date"),
         "parent_id": payload.get("parent_id"),
         "notes": payload.get("notes"),
+        "enrollment_date": payload.get("enrollment_date"),
+        "grade_level": payload.get("grade_level"),
+        "student_status": payload.get("student_status") or "active",
     }
+    missing_resp = _validate_required_fields(
+        data,
+        [
+            "full_name",
+            "birth_date",
+            "parent_id",
+            "enrollment_date",
+            "grade_level",
+            "student_status",
+        ],
+    )
+    if missing_resp:
+        return missing_resp
     res = _table("students").insert(data).execute().data
     return jsonify(student=_augment_student(res)), 201
 
@@ -233,7 +265,15 @@ def create_course():
         "age_from": payload.get("age_from"),
         "age_to": payload.get("age_to"),
         "description": payload.get("description"),
+        "start_time": payload.get("start_time"),
+        "end_time": payload.get("end_time"),
+        "max_participants": payload.get("max_participants"),
     }
+    missing_resp = _validate_required_fields(
+        data, ["name", "start_time", "end_time", "max_participants"]
+    )
+    if missing_resp:
+        return missing_resp
     res = _table("courses").insert(data).execute().data
     return jsonify(course=res), 201
 
@@ -257,7 +297,13 @@ def create_enrollment():
         "course_id": payload.get("course_id"),
         "start_date": payload.get("start_date"),
         "status": payload.get("status", "active"),
+        "completion_date": payload.get("completion_date"),
     }
+    missing_resp = _validate_required_fields(
+        data, ["student_id", "course_id", "start_date", "status", "completion_date"]
+    )
+    if missing_resp:
+        return missing_resp
     res = _table("enrollments").insert(data).execute().data
     return jsonify(enrollment=res), 201
 
@@ -287,7 +333,16 @@ def create_payment():
         "payment_type": payment_type,
         "period": payload.get("period"),
         "comment": payload.get("comment"),
+        "payment_id": payload.get("payment_id"),
+        "payment_method": payload.get("payment_method"),
+        "payment_date": payload.get("payment_date"),
     }
+    missing_resp = _validate_required_fields(
+        data,
+        ["student_id", "amount", "payment_type", "payment_id", "payment_method", "payment_date"],
+    )
+    if missing_resp:
+        return missing_resp
     res = _table("payments").insert(data).execute().data
     return jsonify(payment=res), 201
 
