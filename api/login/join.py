@@ -208,6 +208,21 @@ def _mask_email(e: str) -> str:
     return (m.group(1) + "***" + m.group(2)) if m else e[:2] + "***"
 
 
+def _db_error(action: str, res, email: Optional[str] = None):
+    detail = getattr(res, "error", None)
+    cfg = describe_appwrite_config()
+    masked = _mask_email(email)
+    log.error("%s failed for %s: %s config=%s", action, masked, detail, cfg)
+    body = {
+        "error": "server_error",
+        "message": "Тимчасова помилка. Спробуйте ще раз або зверніться до адміністратора.",
+    }
+    if DEBUG_ERRORS:
+        body["detail"] = detail
+        body["config"] = cfg
+    return jsonify(body), 500
+
+
 def _fail_invalid():
     return jsonify(error="invalid_credentials", message="Невірний email або пароль"), 401
 
@@ -415,10 +430,18 @@ def register_user():
     register = get_client_for_table("register")
 
     try:
-        if contacts.table("contacts").select("user_id").eq("user_email", email).execute().data:
+        existing = contacts.table("contacts").select("user_id").eq("user_email", email).execute()
+        if getattr(existing, "error", None):
+            return _db_error("register: contacts lookup", existing, email)
+
+        if existing.data:
             return jsonify(error="already_registered", message="Користувач уже існує."), 409
 
-        if register.table("register").select("id").eq("user_email", email).execute().data:
+        pending = register.table("register").select("id").eq("user_email", email).execute()
+        if getattr(pending, "error", None):
+            return _db_error("register: pending lookup", pending, email)
+
+        if pending.data:
             return jsonify(message="Заявку вже подано. Очікуйте підтвердження."), 200
 
         res = register.table("register").insert({
@@ -427,6 +450,9 @@ def register_user():
             "user_phone": phone,
             "pass_email": hash_password(pwd),
         }).execute()
+
+        if getattr(res, "error", None):
+            return _db_error("register: insert", res, email)
 
         if not getattr(res, "data", None):
             cfg = describe_appwrite_config()
@@ -471,11 +497,14 @@ def join():
     contacts = get_client_for_table("contacts")
 
     try:
-        row = contacts.table("contacts").select(
+        res = contacts.table("contacts").select(
             "user_id,user_email,user_name,user_phone,user_access,extra_access,pass_email,{tg}".format(
                 tg=RECOVERY_CHAT_FIELD
             )
-        ).eq("user_email", email).single().execute().data
+        ).eq("user_email", email).single().execute()
+        if getattr(res, "error", None):
+            return _db_error("login: lookup", res, email)
+        row = res.data
     except Exception:
         row = None
 
