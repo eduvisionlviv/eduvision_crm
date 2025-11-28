@@ -12,12 +12,46 @@ log = logging.getLogger("coreapiserver")
 _client = None
 _databases = None
 
+
+def _get_env_value(primary: str, *fallbacks: str, default: str = None) -> str:
+    """Return the first non-empty env var among primary and fallbacks."""
+
+    for name in (primary, *fallbacks):
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
 # === НАЛАШТУВАННЯ ЗМІННИХ ===
-# Використовуємо ваші назви змінних з Railway
+# Використовуємо ваші назви змінних з Railway + популярні альтернативи
 ENV_PROJECT_ID = "appwriteprojectid"
+ALT_PROJECT_IDS = (
+    "APPWRITE_PROJECT_ID",
+    "APPWRITE_PROJECTID",
+    "APPWRITE_PROJECT",
+)
+
 ENV_API_KEY    = "appwritepadmin"
+ALT_API_KEYS   = (
+    "APPWRITE_API_KEY",
+    "APPWRITE_APIKEY",
+    "APPWRITE_SECRET",
+    "APPWRITE_KEY",
+)
+
 ENV_DB_ID      = "appwritedatabaseid"
+ALT_DB_IDS     = (
+    "APPWRITE_DATABASE_ID",
+    "APPWRITE_DATABASEID",
+    "APPWRITE_DB_ID",
+    "APPWRITE_DBID",
+)
+
 ENV_ENDPOINT   = "APPWRITE_ENDPOINT"
+ALT_ENDPOINTS  = (
+    "APPWRITE_API_ENDPOINT",
+    "APPWRITE_HOST",
+)
 
 # === МАПІНГ ТАБЛИЦЬ (Код -> Appwrite) ===
 TABLE_MAPPING = {
@@ -36,18 +70,66 @@ TABLE_MAPPING = {
 # === МАПІНГ ПОЛІВ (Код <-> Appwrite) ===
 # Ліворуч: як називає код (join.py). Праворуч: як у вас в базі (user_admin)
 FIELD_MAPPING = {
-    # Код            # Ваша база
+    # ── Логін / admin users (user_admin)
     "user_email":    "email",
-    "pass_email":    "passwordHash",
+    "pass_email":    "passwordhash",
     "user_name":     "username",
     "user_access":   "role",
     "user_id":       "useradminId",
-    "user_phone":    "user_phone",
+    "user_phone":    "phoneNumber",
     "auth_tokens":   "auth_tokens",
     "expires_at":    "expires_at",
     "recovery_tg_id": "recovery_tg_id",
     "recovery_code":  "recovery_code",
     "password_resets_time": "password_resets_time",
+
+    # ── CRM: учні
+    "full_name":    "fullName",
+    "birth_date":   "birthDate",
+    "parent_id":    "parentId",
+    "notes":        "notes",
+    "grade_level":  "gradeLevel",
+    "enrollment_date": "enrollmentDate",
+    "student_status":   "studentStatus",
+
+    # ── CRM: батьки
+    "phone":        "phone",
+    "email":        "email",
+    "preferred_contact_time": "preferredContactTime",
+    "number_of_children":    "numberOfChildren",
+
+    # ── CRM: курси
+    "age_from":     "ageFrom",
+    "age_to":       "ageTo",
+    "description":  "description",
+    "start_time":   "startTime",
+    "end_time":     "endTime",
+    "max_participants": "maxParticipants",
+
+    # ── CRM: записи на курс
+    "student_id":   "studentId",
+    "course_id":    "courseId",
+    "start_date":   "startDate",
+    "status":       "status",
+    "completion_date": "completionDate",
+
+    # ── CRM: оплати
+    "payment_id":   "paymentId",
+    "amount":       "amount",
+    "currency":     "currency",
+    "payment_type": "paymentType",
+    "period":       "period",
+    "comment":      "comment",
+    "payment_status": "status",
+
+    # ── CRM: банківські ключі
+    "provider":       "provider",
+    "api_key_id":     "apiKeyId",
+    "api_secret":     "apiSecret",
+    "webhook_secret": "webhookSecret",
+    "created_by":     "createdBy",
+    "creation_date":  "creationDate",
+    "updated_at":     "updatedAt",
 }
 
 # Створюємо зворотний словник для перекладу відповіді від бази
@@ -57,19 +139,25 @@ def _get_services():
     global _client, _databases
     if _databases:
         return _databases
-    
-    endpoint = os.getenv(ENV_ENDPOINT, "https://cloud.appwrite.io/v1")
-    project_id = os.getenv(ENV_PROJECT_ID)
-    api_key = os.getenv(ENV_API_KEY)
 
-    if not project_id or not api_key:
-        log.error(f"❌ Не задані змінні: {ENV_PROJECT_ID} або {ENV_API_KEY}")
-    
+    endpoint = _get_env_value(ENV_ENDPOINT, *ALT_ENDPOINTS, default="https://cloud.appwrite.io/v1")
+    project_id = _get_env_value(ENV_PROJECT_ID, *ALT_PROJECT_IDS)
+    api_key = _get_env_value(ENV_API_KEY, *ALT_API_KEYS)
+
+    missing = [name for name, val in (
+        (ENV_PROJECT_ID, project_id),
+        (ENV_API_KEY, api_key),
+    ) if not val]
+
+    if missing:
+        log.error("❌ Не задані змінні: %s", ", ".join(missing))
+        raise RuntimeError(f"Відсутні змінні середовища: {', '.join(missing)}")
+
     _client = Client()
     _client.set_endpoint(endpoint)
     _client.set_project(project_id)
     _client.set_key(api_key)
-    
+
     _databases = Databases(_client)
     return _databases
 
@@ -102,7 +190,7 @@ def _translate_output_doc(doc):
 class AppwriteAdapter:
     def __init__(self, table_name=None):
         self.db_service = _get_services()
-        self.db_id = os.getenv(ENV_DB_ID)
+        self.db_id = _get_env_value(ENV_DB_ID, *ALT_DB_IDS)
         self.raw_table_name = table_name
         self.table_name = TABLE_MAPPING.get(table_name, table_name)
         self.queries = []
@@ -146,7 +234,11 @@ class AppwriteAdapter:
 
     def execute(self):
         if not self.db_id:
-            log.error(f"❌ Не задано {ENV_DB_ID}")
+            log.error(
+                "❌ Не задано %s (спробуйте також %s)",
+                ENV_DB_ID,
+                ", ".join(ALT_DB_IDS),
+            )
             return type('Response', (object,), {"data": None})
 
         try:
