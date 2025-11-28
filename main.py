@@ -4,6 +4,7 @@ import importlib.util
 import pathlib
 from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 
 # Імпорти для завантаження API (необхідні для роботи CRM)
 from api.load_module_apis import load_module_apis
@@ -20,6 +21,20 @@ app = Flask(__name__, static_folder="web", static_url_path="")
 # Налаштування CORS
 allowed = os.getenv("crm_url", "http://localhost:5000")
 CORS(app, resources={r"/api/*": {"origins": [d.strip() for d in allowed.split(",")]}})
+
+
+# ─────────────── Глобальний JSON-обробник помилок
+@app.errorhandler(Exception)
+def json_error_handler(err):
+    status_code = 500
+    message = "Внутрішня помилка сервера"
+
+    if isinstance(err, HTTPException):
+        status_code = err.code or status_code
+        message = err.description or message
+
+    log.exception("Unhandled error: %s", err)
+    return jsonify(error="server_error", message=message), status_code
 
 # ─────────────── Динамічне завантаження API-модулів
 # Це необхідно залишити, щоб працювали запити з фронтенду до бази даних
