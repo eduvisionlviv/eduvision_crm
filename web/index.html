@@ -74,13 +74,41 @@
         if(ROLE_PAGES[mapped]) roles.add(mapped);
       };
 
-      add(primary);
+      const parseAndAdd = (value) => {
+        if(!value) return;
 
-      if(Array.isArray(extra)){
-        extra.forEach(add);
-      } else if(typeof extra === "string"){
-        extra.split(/[,\s]+/).forEach(add);
-      }
+        if(Array.isArray(value)){
+          value.forEach(parseAndAdd);
+          return;
+        }
+
+        if(typeof value === "object"){
+          Object.entries(value).forEach(([key, val]) => {
+            if(val) add(key);
+          });
+          return;
+        }
+
+        if(typeof value === "string"){
+          const trimmed = value.trim();
+          if(!trimmed) return;
+
+          try {
+            const parsed = JSON.parse(trimmed);
+            return parseAndAdd(parsed);
+          } catch {
+            // ignore malformed JSON; fallback to simple parsing below
+          }
+
+          trimmed.split(/[,\s]+/).forEach(add);
+          return;
+        }
+
+        add(value);
+      };
+
+      add(primary);
+      parseAndAdd(extra);
 
       return Array.from(roles);
     }
