@@ -40,19 +40,88 @@
   <script>
     // Позначаємо сторінку логіну (якщо інші скрипти це враховують)
     window.IS_LOGIN_PAGE = true;
+
+    const ROLE_PAGES = {
+      def: "/main/main.html",   // працівник
+      parent: "/parent.html",   // мама/батько — поки заглушка
+      student: "/student.html", // учень — поки заглушка
+    };
+
+    const ROLE_MAP = {
+      contacts: "def",
+      def: "def",
+      parent: "parent",
+      parents: "parent",
+      student: "student",
+      child: "student",
+    };
+
+    function cacheProfile(u){
+      if(!u) return;
+      localStorage.setItem("user_id",      u.user_id);
+      localStorage.setItem("user_name",    u.user_name);
+      localStorage.setItem("user_access",  u.user_access || "");
+      localStorage.setItem("extra_access", u.extra_access ?? "");
+      localStorage.setItem("user_role",    u.user_access || "");
+    }
+
+    function normalizeRoles(primary, extra){
+      const roles = new Set();
+      const add = (raw) => {
+        if(!raw) return;
+        const clean = String(raw).trim().toLowerCase();
+        const mapped = ROLE_MAP[clean] || clean;
+        if(ROLE_PAGES[mapped]) roles.add(mapped);
+      };
+
+      add(primary);
+
+      if(Array.isArray(extra)){
+        extra.forEach(add);
+      } else if(typeof extra === "string"){
+        extra.split(/[,\s]+/).forEach(add);
+      }
+
+      return Array.from(roles);
+    }
+
+    async function fetchProfile(){
+      const r = await fetch("/api/login/me", { credentials: "include", cache: "no-store" });
+      if(!r.ok) return null;
+      const d = await r.json();
+      const u = d.user || d;
+      cacheProfile(u);
+      return u;
+    }
+
+    async function redirectByRole(profile){
+      const availableRoles = normalizeRoles(profile?.user_access, profile?.extra_access);
+      const options = availableRoles.map(role => ({
+        role,
+        user_name: profile?.user_name,
+        user_id: profile?.user_id,
+      }));
+
+      if(!options.length){
+        return location.href = ROLE_PAGES.def;
+      }
+
+      if(options.length === 1){
+        return location.href = ROLE_PAGES[options[0].role] || ROLE_PAGES.def;
+      }
+
+      const choice = await pickProfile(options, "Оберіть роль для входу");
+      if(choice?.role && ROLE_PAGES[choice.role]){
+        location.href = ROLE_PAGES[choice.role];
+      }
+    }
+
     // 🔐 Тиха перевірка сесії без шуму в консолі та без кешу
     (async () => {
       try {
-        const r = await fetch("/api/login/me", { credentials: "include", cache: "no-store" });
-        if (r.ok) {
-          const d = await r.json();
-          const u = d.user || d;
-          localStorage.setItem("user_id",      u.user_id);
-          localStorage.setItem("user_name",    u.user_name);
-          localStorage.setItem("user_access",  u.user_access);
-          localStorage.setItem("extra_access", u.extra_access);
-          localStorage.setItem("user_role",    u.user_access);
-          location.href = "/main/main.html";
+        const profile = await fetchProfile();
+        if(profile){
+          await redirectByRole(profile);
         }
         // 401 на сторінці логіну — очікувано, нічого не робимо.
       } catch {
@@ -220,7 +289,12 @@
           return doLogin({ ...body, target_user_id: choice.user_id, target_table: choice.table });
         }
         if(!r.ok) return alert(d.message || d.error || "Помилка входу"), false;
-        location.href="/main/main.html"; // кука вже виставлена бекендом
+        const profile = await fetchProfile();
+        if(profile){
+          await redirectByRole(profile);
+        } else {
+          location.href = ROLE_PAGES.def;
+        }
         return true;
       }
 
