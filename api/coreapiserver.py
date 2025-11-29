@@ -64,6 +64,8 @@ TABLE_DB_MAP = {
     "scheduled_tasks": "stock",
     "invoice": "stock",
     "return": "stock",
+    "parents": "stock",
+    "student": "stock",
 }
 
 def get_client_for_table(table_name: str) -> Client:
