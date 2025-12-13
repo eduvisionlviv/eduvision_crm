@@ -1,29 +1,27 @@
-# Використовуємо офіційний образ Playwright (в ньому вже є браузери!)
+# Використовуємо образ Playwright
 FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
-# Робоча папка
 WORKDIR /app
 
-# Копіюємо requirements
+# Встановлюємо залежності
 COPY requirements.txt requirements.txt
-
-# Встановлюємо залежності Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Створюємо користувача (вимога безпеки Hugging Face)
-RUN useradd -m -u 1000 user
+# --- ВИПРАВЛЕННЯ ---
+# Користувач з ID 1000 вже існує (його звати pwuser). 
+# Ми не створюємо нового, а використовуємо його.
 
-# Копіюємо весь код і віддаємо права юзеру
-COPY --chown=user . /app
+# Копіюємо файли і віддаємо права pwuser
+COPY --chown=pwuser . /app
 
-# Перемикаємось на юзера
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH \
+# Перемикаємось на pwuser
+USER pwuser
+ENV HOME=/home/pwuser \
+    PATH=/home/pwuser/.local/bin:$PATH \
     PYTHONUNBUFFERED=1
 
-# Hugging Face очікує порт 7860
+# Порт для Hugging Face
 EXPOSE 7860
 
-# Запускаємо через Gunicorn (вказуємо main:app, бо ваш файл main.py)
+# Запуск
 CMD ["gunicorn", "-b", "0.0.0.0:7860", "main:app", "--timeout", "120"]
