@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time  # <--- Додано для пауз
 from typing import Optional
 
 import httpx
@@ -140,10 +141,12 @@ def build_conversation_handler() -> ConversationHandler:
 # --- STARTUP CHECK ---
 
 async def on_post_init(application: Application) -> None:
-    """Ця функція викликається, коли бот успішно з'єднався з Telegram."""
-    me = await application.bot.get_me()
-    LOGGER.info(f"✅✅✅ БОТ УСПІШНО ПІДКЛЮЧИВСЯ! Ім'я: @{me.username} (ID: {me.id})")
-    LOGGER.info("Тепер ви можете писати йому /start")
+    """Ця функція викликається ТІЛЬКИ коли є реальний зв'язок."""
+    try:
+        me = await application.bot.get_me()
+        LOGGER.info(f"✅✅✅ БОТ ПІДКЛЮЧИВСЯ! @{me.username} (ID: {me.id})")
+    except Exception as e:
+        LOGGER.warning(f"⚠️ post_init warning: {e}")
 
 # --- APP BUILDER ---
 
@@ -152,7 +155,7 @@ def get_application() -> Application:
     if _application is None:
         token = get_bot_token()
         
-        # Налаштування для стабільності мережі
+        # Максимально лояльні налаштування мережі
         request_settings = HTTPXRequest(
             connect_timeout=60.0,
             read_timeout=60.0,
@@ -165,7 +168,7 @@ def get_application() -> Application:
             .token(token)
             .request(request_settings)
             .get_updates_request(request_settings)
-            .post_init(on_post_init) # <--- ДОДАНО ПЕРЕВІРКУ ПІДКЛЮЧЕННЯ
+            .post_init(on_post_init)
             .build()
         )
 
@@ -177,12 +180,24 @@ def get_application() -> Application:
     return _application
 
 def run_bot() -> None:
+    """Головна функція запуску з вічним циклом перезавантаження."""
     application = get_application()
     
-    LOGGER.info("🚀 Запуск Telegram бота... Чекаємо на з'єднання...")
+    LOGGER.info("🚀 Запуск Telegram бота... Входимо в режим очікування з'єднання...")
 
-    # bootstrap_retries=-1 змушує бота довбати сервери Телеграм, поки не підключиться
-    try:
-        application.run_polling(stop_signals=None, bootstrap_retries=-1, timeout=60)
-    except Exception as exc:
-        LOGGER.error(f"❌ Критична помилка бота: {exc}")
+    while True:
+        try:
+            # Намагаємось запустити бота
+            application.run_polling(
+                stop_signals=None, 
+                bootstrap_retries=-1, # Просимо лібу пробувати
+                timeout=60
+            )
+            # Якщо run_polling завершився без помилок (наприклад, ми його зупинили), виходимо
+            break
+        except Exception as exc:
+            # Якщо сталася помилка (наприклад, DNS), ловимо її тут
+            LOGGER.error(f"❌ Збій з'єднання (DNS/Network): {exc}")
+            LOGGER.info("🔄 Перезапуск бота через 10 секунд...")
+            time.sleep(10)
+            # І цикл починається знову -> application.run_polling()
