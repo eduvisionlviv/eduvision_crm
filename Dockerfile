@@ -1,39 +1,63 @@
-# 1. Фіксуємо версію Debian (bookworm = стабільна), щоб пакети не зникали
 FROM python:3.10-slim-bookworm
 
-# Встановлюємо робочу директорію
 WORKDIR /app
 
-# 2. Оновлюємо систему і ставимо тільки мінімум для збірки
-# Прибираємо довгий список бібліотек, які викликали помилку
+# 1. Встановлюємо системні бібліотеки ВРУЧНУ (як ROOT)
+# Ми робимо це тут, щоб не використовувати "playwright install-deps", який ламається через пароль
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgtk-3-0 \
+    libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Створюємо користувача (безпека)
+# 2. Створюємо користувача
 RUN useradd -m -u 1000 user
 
-# 4. Встановлюємо Python-залежності (включаючи Playwright)
+# 3. Налаштовуємо спільну папку для браузерів
+# Це дозволить встановити браузер один раз як root, і він буде доступний для user
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+
+# 4. Встановлюємо Python залежності
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. МАГІЯ: Доручаємо Playwright самому встановити системні бібліотеки
-# Флаг --with-deps автоматично підтягне правильні версії libatk, libgtk і т.д.
-RUN playwright install --with-deps chromium
+# 5. Встановлюємо Chromium (як ROOT)
+# Ми НЕ використовуємо --with-deps, бо ми вже поставили все в кроці 1
+RUN playwright install chromium
 
-# 6. Копіюємо код проекту і передаємо права
+# 6. Передаємо права на папку браузерів нашому користувачу
+RUN chown -R user:user $PLAYWRIGHT_BROWSERS_PATH
+
+# 7. Копіюємо код додатка
 COPY --chown=user:user . /app
 
-# 7. Перемикаємось на користувача
+# 8. Перемикаємось на юзера для безпеки
 USER user
-
-# Налаштовуємо середовище
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     PYTHONUNBUFFERED=1
 
-# Порт
+EXPOSE 7860
+
+# Запуск
+CMD ["gunicorn", "-b", "0.0.0.0:7860", "main:app", "--timeout", "120", "--workers", "1", "--threads", "8"]
 EXPOSE 7860
 
 # 8. Запуск
