@@ -1,4 +1,4 @@
-# Використовуємо образ Playwright
+# Використовуємо образ Playwright (де вже є браузери)
 FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
@@ -8,13 +8,10 @@ COPY requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- ВИПРАВЛЕННЯ ---
-# Користувач з ID 1000 вже існує (його звати pwuser). 
-# Ми не створюємо нового, а використовуємо його.
-
-# Копіюємо файли і віддаємо права pwuser
+# Користувач з ID 1000 вже існує (pwuser). Ми просто використовуємо його.
 COPY --chown=pwuser . /app
 
-# Перемикаємось на pwuser
+# Перемикаємось на існуючого юзера
 USER pwuser
 ENV HOME=/home/pwuser \
     PATH=/home/pwuser/.local/bin:$PATH \
