@@ -1,4 +1,3 @@
-
 ---
 title: Eduvision CRM
 emoji: 🚀
@@ -9,4 +8,3 @@ pinned: false
 app_port: 7860
 ---
 
-# Тут далі йде ваш звичайний текст Readme...
