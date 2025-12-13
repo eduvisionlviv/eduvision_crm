@@ -24,7 +24,7 @@ jobs:
           
           # Додаємо Hugging Face як віддалений сервер
           # ЗАМІНІТЬ 'USERNAME' на ваш нік на HF, а 'SPACE_NAME' на назву спейсу
-          git remote add space https://oauth2:$HF_TOKEN@huggingface.co/spaces/USERNAME/SPACE_NAME
+          git remote add space https://oauth2:$HF_TOKEN@huggingface.co/spaces/gammmer/Eduvisioncrm
           
           # Відправляємо файли (force push гарантує, що HF буде точною копією GitHub)
           git push --force space main
