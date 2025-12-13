@@ -3,7 +3,7 @@ FROM python:3.10-slim-bookworm
 WORKDIR /app
 
 # 1. Встановлюємо системні бібліотеки ВРУЧНУ (як ROOT)
-# Ми робимо це тут, щоб не використовувати "playwright install-deps", який ламається через пароль
+# Ми робимо це тут, щоб не використовувати "playwright install-deps", який ламається
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -30,7 +30,6 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 1000 user
 
 # 3. Налаштовуємо спільну папку для браузерів
-# Це дозволить встановити браузер один раз як root, і він буде доступний для user
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
 
@@ -39,7 +38,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Встановлюємо Chromium (як ROOT)
-# Ми НЕ використовуємо --with-deps, бо ми вже поставили все в кроці 1
+# Увага: тут немає команди install-deps!
 RUN playwright install chromium
 
 # 6. Передаємо права на папку браузерів нашому користувачу
@@ -57,31 +56,4 @@ ENV HOME=/home/user \
 EXPOSE 7860
 
 # Запуск
-CMD ["gunicorn", "-b", "0.0.0.0:7860", "main:app", "--timeout", "120", "--workers", "1", "--threads", "8"]
-EXPOSE 7860
-
-# 8. Запуск
-CMD ["gunicorn", "-b", "0.0.0.0:7860", "main:app", "--timeout", "120", "--workers", "1", "--threads", "8"]
-# Це критичний момент: браузер ставиться глобально, і права доступу будуть правильними.
-RUN playwright install chromium
-# install-deps про всяк випадок, хоча ми вже поставили пакети вручну в кроці 2
-RUN playwright install-deps chromium 
-
-# 6. Копіюємо весь код проекту
-# Одразу передаємо права нашому користувачу "user"
-COPY --chown=user:user . /app
-
-# 7. Перемикаємось на безпечного користувача
-USER user
-
-# Налаштовуємо змінні середовища
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH \
-    PYTHONUNBUFFERED=1
-
-# Відкриваємо порт
-EXPOSE 7860
-
-# 8. Запуск сервера
-# --timeout 120 дає більше часу на "холодний старт", щоб уникнути падінь
 CMD ["gunicorn", "-b", "0.0.0.0:7860", "main:app", "--timeout", "120", "--workers", "1", "--threads", "8"]
