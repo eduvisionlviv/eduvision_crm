@@ -22,8 +22,6 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("main")
 
 # ─────────────── Playwright: керування браузером ───────────
-# (КОД ІНСТАЛЯЦІЇ ВИДАЛЕНО, бо ми це зробили в Dockerfile)
-
 _browser = None
 _pw = None
 _browser_last_used = 0.0
@@ -119,7 +117,11 @@ def load_api(app: Flask, folder: str = "api"):
 load_module_apis(app)
 load_api(app)
 with_global_lock(app)
-taskscheduler.start_scheduler_once()
+
+# --- ТИМЧАСОВО ВИМКНЕНО: Планувальник завдань ---
+# Це зупинить помилки "Could not find the table public.scheduled_tasks"
+# taskscheduler.start_scheduler_once()
+log.info("⏸️  Планувальник завдань (Scheduler) тимчасово вимкнено.")
 
 # Спроба завантажити test_mail_tool (якщо файл існує)
 try:
@@ -139,8 +141,7 @@ def start_telegram_bot_if_configured():
             return
 
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
-            if not _telegram_thread: # Логуємо тільки один раз
-                 log.info("TELEGRAM_BOT_TOKEN не задано. Бот вимкнено.")
+            log.info("TELEGRAM_BOT_TOKEN не задано. Бот вимкнено.")
             return
 
         def _bot_worker():
@@ -201,18 +202,15 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # ─────────────── Перерахунок цін (Опціонально) ───────────────
-# Цей блок викликав помилку в логах. Додано безпечний імпорт.
 try:
     from api.coreapiserver import get_client_for_table
     from api.currency_update import _reprice_sklad_by_rate
     
     base = get_client_for_table("uni_base")
-    # Перевірка наявності таблиці/запису перед запитом
     try:
         row = base.table("uni_base").select("jsonb").eq("id", 2).execute().data
         if row:
             raw = row[0].get("jsonb")
-            # Обробка різних форматів jsonb
             if isinstance(raw, dict):
                 rate = float(raw.get("usd_sale") or raw.get("usd") or raw.get("rate") or raw.get("sale") or 0)
             else:
