@@ -1,16 +1,7 @@
 """Telegram-бот на основі `python-telegram-bot` з додатковими клієнтами.
 
-Основний цикл обробки оновлень працює на `python-telegram-bot` (PTB), що дає
-готові механізми `JobQueue`, `ConversationHandler` та інші сучасні можливості.
-
-На додачу ми тримаємо ледачо створений клієнт `telebot.TeleBot` (модуль пакета
-`pyTelegramBotAPI`) для простих синхронних викликів із інших частин бекенду.
-Для повної сумісності залишено і низькорівневий HTTP-шар на основі ``httpx``.
-
-Наразі бот завжди відповідає на команду `/start` фразою
-``"Вітаю я твій помічник від Helen Doron"``. Також присутні шаблони для
-майбутніх сценаріїв: повторювана задача в `JobQueue` та мінімальний
-`ConversationHandler`, який можна розширювати під потреби клієнта.
+Основний цикл обробки оновлень працює на `python-telegram-bot` (PTB).
+Виправлено: додано стійкість до проблем з мережею при запуску (DNS/ConnectError).
 """
 
 from __future__ import annotations
@@ -23,6 +14,8 @@ from typing import Optional
 import httpx
 from telebot import TeleBot
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+# Додано HTTPXRequest для налаштування з'єднання
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -31,6 +24,7 @@ from telegram.ext import (
     JobQueue,
     MessageHandler,
     filters,
+    ApplicationBuilder # Використовуємо явний builder
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -69,7 +63,6 @@ __all__ = [
 
 def get_bot_token() -> str:
     """Читає токен бота з ``TELEGRAM_BOT_TOKEN``."""
-
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
@@ -78,7 +71,6 @@ def get_bot_token() -> str:
 
 def get_bot_username() -> str:
     """Повертає username Telegram-бота, викликаючи getMe при потребі."""
-
     global _BOT_USERNAME
     if _BOT_USERNAME:
         return _BOT_USERNAME
@@ -93,11 +85,12 @@ def get_bot_username() -> str:
             response.raise_for_status()
             data = response.json()
             username = data.get("result", {}).get("username")
-    except Exception as exc:  # pragma: no cover - мережевий код
-        raise RuntimeError("Не вдалося отримати username Telegram-бота") from exc
+    except Exception as exc:
+        LOGGER.warning(f"Не вдалося отримати username (спроба мережі): {exc}")
+        return "UnknownBot" # Повертаємо заглушку, щоб не крашити весь додаток
 
     if not username:
-        raise RuntimeError("Telegram API не повернув username для бота")
+        return "UnknownBot"
 
     _BOT_USERNAME = username
     return username
@@ -109,8 +102,6 @@ def _link_callback_url() -> str:
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробляє `/start` і, за необхідності, пропонує поділитися телефоном."""
-
     if not update.message:
         return
 
@@ -131,8 +122,6 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Передає контакт у бекенд для валідації телефону користувача."""
-
     if not update.message or not update.message.contact:
         return
 
@@ -162,7 +151,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(_link_callback_url(), json=payload)
             data = response.json()
-    except Exception as exc:  # pragma: no cover - лише логування
+    except Exception as exc:
         LOGGER.exception("link_recovery call failed: %s", exc)
         await update.message.reply_text(
             "⚠️ Сталася помилка. Спробуйте ще раз пізніше.",
@@ -180,8 +169,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def conversation_entry(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Стартує демонстраційний діалог, який можна розширювати."""
-
     if update.message:
         await update.message.reply_text(
             "Це шаблон розмови. Напишіть відповідь або скористайтеся /cancel."
@@ -192,8 +179,6 @@ async def conversation_entry(
 async def conversation_store_reply(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Зберігає відповідь користувача у user_data і завершує діалог."""
-
     if update.message:
         context.user_data["last_reply"] = update.message.text
         await update.message.reply_text(
@@ -205,8 +190,6 @@ async def conversation_store_reply(
 async def conversation_cancel(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Дозволяє користувачеві вийти з діалогу."""
-
     if update.message:
         await update.message.reply_text("Розмову скасовано.")
     context.user_data.clear()
@@ -214,8 +197,6 @@ async def conversation_cancel(
 
 
 def build_conversation_handler() -> ConversationHandler:
-    """Створює мінімальний ConversationHandler для майбутніх сценаріїв."""
-
     return ConversationHandler(
         entry_points=[CommandHandler("dialog", conversation_entry)],
         states={
@@ -227,16 +208,11 @@ def build_conversation_handler() -> ConversationHandler:
 
 
 async def scheduled_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Проста періодична задача JobQueue (можна замінити на бізнес-логіку)."""
-
     job = context.job
     LOGGER.info("JobQueue heartbeat відпрацював (job=%s, data=%s)", job.name, job.data)
 
 
 def configure_jobqueue(job_queue: JobQueue) -> None:
-    """Налаштовує базові задачі JobQueue."""
-
-    # Перевірку інтервалу можна буде змінити через конфіг або env
     job_queue.run_repeating(
         scheduled_heartbeat,
         interval=3600,
@@ -247,12 +223,28 @@ def configure_jobqueue(job_queue: JobQueue) -> None:
 
 
 def get_application() -> Application:
-    """Створює (або повертає кешований) застосунок PTB."""
+    """Створює (або повертає кешований) застосунок PTB з налаштуваннями мережі."""
 
     global _application
     if _application is None:
         token = get_bot_token()
-        application = Application.builder().token(token).build()
+        
+        # --- ВИПРАВЛЕННЯ: Налаштування запитів ---
+        request_settings = HTTPXRequest(
+            connect_timeout=60.0,
+            read_timeout=60.0,
+            write_timeout=60.0,
+            connection_pool_size=8,
+        )
+        
+        # Будуємо додаток з цими налаштуваннями
+        application = (
+            ApplicationBuilder()
+            .token(token)
+            .request(request_settings)             # Для звичайних запитів
+            .get_updates_request(request_settings) # Для polling запитів
+            .build()
+        )
 
         application.add_handler(CommandHandler("start", handle_start))
         application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
@@ -264,8 +256,6 @@ def get_application() -> Application:
 
 
 def get_telebot() -> TeleBot:
-    """Ледаче створення клієнта telebot для синхронних викликів."""
-
     global _telebot
     if _telebot is None:
         _telebot = TeleBot(get_bot_token(), parse_mode="HTML")
@@ -273,16 +263,18 @@ def get_telebot() -> TeleBot:
 
 
 def send_message_httpx(chat_id: int, text: str) -> None:
-    """Пряме звернення до Telegram API через httpx (низькорівневий варіант)."""
-
     token = get_bot_token()
-    with httpx.Client() as client:
-        response = client.post(
-            API_URL_TEMPLATE.format(token=token, method="sendMessage"),
-            json={"chat_id": chat_id, "text": text},
-            timeout=15,
-        )
-        response.raise_for_status()
+    # Тут теж можна додати try/except, але це синхронний виклик, 
+    # зазвичай він робиться вже коли додаток працює.
+    try:
+        with httpx.Client(timeout=20) as client:
+            response = client.post(
+                API_URL_TEMPLATE.format(token=token, method="sendMessage"),
+                json={"chat_id": chat_id, "text": text},
+            )
+            response.raise_for_status()
+    except Exception as e:
+        LOGGER.error(f"Помилка надсилання повідомлення через httpx: {e}")
 
 
 def run_bot() -> None:
@@ -290,14 +282,23 @@ def run_bot() -> None:
 
     application = get_application()
 
-    # Ініціалізуємо telebot заздалегідь, щоб перехопити можливі помилки конфігурації
+    # Ініціалізуємо telebot (опціонально)
     get_telebot()
 
+    LOGGER.info("🚀 Запуск Telegram бота (режим Polling з retry)...")
+
     try:
-        application.run_polling(stop_signals=None)
+        # --- ВИПРАВЛЕННЯ: bootstrap_retries=-1 ---
+        # Це змушує бота пробувати підключитися безкінечно, 
+        # поки не з'явиться інтернет, замість того щоб падати одразу.
+        application.run_polling(
+            stop_signals=None, 
+            bootstrap_retries=-1, 
+            timeout=60
+        )
     except KeyboardInterrupt:
         LOGGER.info("Telegram-бот зупинено користувачем")
-    except Exception:  # pragma: no cover - лише для логування у продакшені
+    except Exception:
         LOGGER.exception("Telegram-бот завершився з помилкою")
         raise
 
