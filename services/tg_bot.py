@@ -52,6 +52,78 @@ def get_bot_token() -> str:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
     return token
 
+
+def _telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0) -> dict:
+    """Викликає Telegram Bot API через httpx і повертає декодовану відповідь."""
+
+    token = get_bot_token()
+    url = API_URL_TEMPLATE.format(token=token, method=method)
+    response = httpx.post(url, json=payload, timeout=timeout)
+    response.raise_for_status()
+    data = response.json()
+    if not data.get("ok"):
+        raise RuntimeError(data.get("description") or "Unknown Telegram error")
+    return data
+
+
+def send_message_httpx(chat_id: int, text: str) -> bool:
+    """Надсилає повідомлення через Bot API без запуску поллінгу."""
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        _telegram_api_request("sendMessage", payload)
+        return True
+    except Exception as exc:
+        LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
+        return False
+
+
+def get_bot_username() -> str:
+    """Повертає username бота або піднімає виняток із поясненням."""
+
+    global _BOT_USERNAME
+    if _BOT_USERNAME:
+        return _BOT_USERNAME
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
+
+    try:
+        data = _telegram_api_request("getMe", {})
+        username = data.get("result", {}).get("username")
+        if not username:
+            raise RuntimeError("Bot API не повернув username")
+        _BOT_USERNAME = username
+        return username
+    except Exception as exc:
+        raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
+
+
+def get_bot_status() -> dict:
+    """Повертає зрозумілий статус налаштування Telegram-бота."""
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    status: dict = {"configured": bool(token)}
+
+    if not token:
+        status["message"] = "TELEGRAM_BOT_TOKEN не задано. Додайте токен у змінні середовища."
+        return status
+
+    try:
+        status["bot_username"] = get_bot_username()
+        status["status"] = "ok"
+    except Exception as exc:
+        status["status"] = "error"
+        status["message"] = str(exc)
+
+    return status
+
 def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
     return f"{base}{LINK_RECOVERY_PATH}"
