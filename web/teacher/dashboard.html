@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Кабінет вчителя - EduVision CRM</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar (Desktop) -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span>📚</span>
+        <span>EduVision CRM</span>
+      </div>
+      <nav>
+        <ul class="sidebar-nav">
+          <li><a href="/teacher/dashboard.html" class="active"><span class="icon">📊</span> Головна</a></li>
+          <li><a href="/teacher/groups.html"><span class="icon">👥</span> Мої групи</a></li>
+          <li><a href="/teacher/attendance.html"><span class="icon">✅</span> Відвідуваність</a></li>
+          <li><a href="/teacher/schedule.html"><span class="icon">📅</span> Розклад</a></li>
+          <li><a href="#" id="logout-btn"><span class="icon">🚪</span> Вихід</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div class="header">
+        <h1 class="header-title">Вітаємо, <span id="teacher-name">Вчитель</span>!</h1>
+        <div class="header-actions">
+          <span class="text-muted">Кабінет вчителя</span>
+        </div>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="grid grid-3">
+        <div class="stat-card">
+          <div class="stat-label">Мої групи</div>
+          <div class="stat-value" id="my-groups">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Всього учнів</div>
+          <div class="stat-value" id="total-students">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Занять сьогодні</div>
+          <div class="stat-value" id="lessons-today">-</div>
+        </div>
+      </div>
+
+      <!-- My Groups -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Мої групи</h2>
+          <a href="/teacher/groups.html" class="btn btn-sm btn-secondary">Переглянути всі</a>
+        </div>
+        <div class="card-body">
+          <div class="table-container" id="groups-container">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Upcoming Lessons -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Найближчі заняття</h2>
+          <a href="/teacher/schedule.html" class="btn btn-sm btn-secondary">Весь розклад</a>
+        </div>
+        <div class="card-body">
+          <div class="table-container" id="lessons-container">
+            <div class="text-muted text-center">Завантаження...</div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Bottom Navigation (Mobile) -->
+    <nav class="bottom-nav">
+      <a href="/teacher/dashboard.html" class="bottom-nav-item active">
+        <span class="icon">📊</span>
+        <span>Головна</span>
+      </a>
+      <a href="/teacher/groups.html" class="bottom-nav-item">
+        <span class="icon">👥</span>
+        <span>Групи</span>
+      </a>
+      <a href="/teacher/attendance.html" class="bottom-nav-item">
+        <span class="icon">✅</span>
+        <span>Відвідуваність</span>
+      </a>
+      <a href="/teacher/schedule.html" class="bottom-nav-item">
+        <span class="icon">📅</span>
+        <span>Розклад</span>
+      </a>
+    </nav>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    async function loadTeacherDashboard() {
+      try {
+        // Load user info
+        if (User.data) {
+          document.getElementById('teacher-name').textContent = User.data.user_name || 'Вчитель';
+          const teacherId = User.data.user_id;
+
+          // Load teacher's groups
+          const groupsRes = await API.get(`/groups?teacher_id=${teacherId}`);
+          const groups = groupsRes.groups || [];
+          
+          document.getElementById('my-groups').textContent = groups.length;
+
+          // Calculate total students
+          const totalStudents = groups.reduce((sum, g) => sum + (g.current_students || 0), 0);
+          document.getElementById('total-students').textContent = totalStudents;
+
+          // Render groups table
+          renderGroups(groups);
+
+          // Load today's lessons (placeholder)
+          document.getElementById('lessons-today').textContent = '0';
+          renderLessons([]);
+        }
+      } catch (error) {
+        console.error('Error loading teacher dashboard:', error);
+        UI.showAlert('Помилка завантаження даних', 'danger');
+      }
+    }
+
+    function renderGroups(groups) {
+      const container = document.getElementById('groups-container');
+      
+      if (groups.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted">У вас поки немає груп</div>';
+        return;
+      }
+
+      const table = Table.create(
+        groups,
+        [
+          { label: 'Назва', field: 'name' },
+          { label: 'Курс', render: row => row.courses?.name || '-' },
+          { label: 'Учні', render: row => `${row.current_students || 0}/${row.max_students || 10}` },
+          { label: 'Кімната', render: row => row.room || '-' }
+        ],
+        [
+          { label: '👁️', class: 'btn-secondary', onClick: row => window.location.href = `/teacher/group.html?id=${row.id}` }
+        ]
+      );
+
+      container.innerHTML = '';
+      container.appendChild(table);
+    }
+
+    function renderLessons(lessons) {
+      const container = document.getElementById('lessons-container');
+      container.innerHTML = '<div class="text-center text-muted">Немає запланованих занять</div>';
+    }
+
+    document.addEventListener('DOMContentLoaded', loadTeacherDashboard);
+  </script>
+</body>
+</html>

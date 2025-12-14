@@ -42,14 +42,17 @@
     window.IS_LOGIN_PAGE = true;
 
     const ROLE_PAGES = {
-      def: "/main/main.html",   // працівник
-      parent: "/parent.html",   // мама/батько — поки заглушка
-      student: "/student.html", // учень — поки заглушка
+      def: "/admin/dashboard.html",      // адміністратор/працівник
+      teacher: "/teacher/dashboard.html", // вчитель
+      parent: "/parent/dashboard.html",   // мама/батько
+      student: "/student/dashboard.html", // учень
     };
 
     const ROLE_MAP = {
       contacts: "def",
       def: "def",
+      admin: "def",
+      teacher: "teacher",
       parent: "parent",
       parents: "parent",
       student: "student",
@@ -211,7 +214,8 @@
 
     const ROLE_LABEL = {
       def: "Я працівник",
-      parent: "Я мама",
+      teacher: "Я вчитель",
+      parent: "Я мама/батько",
       student: "Я учень"
     };
 
@@ -422,7 +426,12 @@
           const d = await r.json();
           if(!r.ok) return alert(d.message || "Не вдалося змінити пароль. Спробуйте ще раз.");
           alert("Пароль змінено. Входимо…");
-          location.href="/main/main.html";
+          const profile = await fetchProfile();
+          if (profile) {
+            await redirectByRole(profile);
+          } else {
+            location.href = ROLE_PAGES.def;
+          }
         }catch{ alert("⚠️ Сервер недоступний"); }
       };
     })();
