@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Управління групами - EduVision CRM</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar (Desktop) -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span>📚</span>
+        <span>EduVision CRM</span>
+      </div>
+      <nav>
+        <ul class="sidebar-nav">
+          <li><a href="/admin/dashboard.html"><span class="icon">📊</span> Головна</a></li>
+          <li><a href="/admin/courses.html"><span class="icon">📖</span> Курси</a></li>
+          <li><a href="/admin/groups.html" class="active"><span class="icon">👥</span> Групи</a></li>
+          <li><a href="/admin/students.html"><span class="icon">🎓</span> Учні</a></li>
+          <li><a href="#" id="logout-btn"><span class="icon">🚪</span> Вихід</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div class="header">
+        <h1 class="header-title">Управління групами</h1>
+        <div class="header-actions">
+          <button class="btn btn-primary" onclick="showCreateModal()">
+            <span>➕</span> Створити групу
+          </button>
+        </div>
+      </div>
+
+      <!-- Groups List -->
+      <div class="card">
+        <div class="table-container" id="groups-container">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Bottom Navigation (Mobile) -->
+    <nav class="bottom-nav">
+      <a href="/admin/dashboard.html" class="bottom-nav-item">
+        <span class="icon">📊</span>
+        <span>Головна</span>
+      </a>
+      <a href="/admin/groups.html" class="bottom-nav-item active">
+        <span class="icon">👥</span>
+        <span>Групи</span>
+      </a>
+      <a href="/admin/students.html" class="bottom-nav-item">
+        <span class="icon">🎓</span>
+        <span>Учні</span>
+      </a>
+      <a href="/admin/settings.html" class="bottom-nav-item">
+        <span class="icon">⚙️</span>
+        <span>Ще</span>
+      </a>
+    </nav>
+  </div>
+
+  <!-- Create/Edit Modal -->
+  <div class="modal" id="groupModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modalTitle">Створити групу</h2>
+        <button class="modal-close" onclick="hideModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="groupForm">
+          <input type="hidden" id="groupId" name="id">
+          
+          <div class="form-group">
+            <label class="form-label">Назва групи *</label>
+            <input type="text" class="form-input" id="groupName" name="name" required>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Курс *</label>
+            <select class="form-select" id="groupCourse" name="course_id" required>
+              <option value="">Оберіть курс</option>
+            </select>
+          </div>
+          
+          <div class="grid grid-2">
+            <div class="form-group">
+              <label class="form-label">Макс. учнів</label>
+              <input type="number" class="form-input" id="groupMax" name="max_students" value="10" min="1" max="20">
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Кімната</label>
+              <input type="text" class="form-input" id="groupRoom" name="room">
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="hideModal()">Скасувати</button>
+        <button class="btn btn-primary" onclick="saveGroup()">Зберегти</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let groups = [];
+    let courses = [];
+
+    async function loadData() {
+      try {
+        UI.showLoading('groups-container');
+        const [groupsRes, coursesRes] = await Promise.all([
+          API.get('/groups'),
+          API.get('/courses')
+        ]);
+        
+        groups = groupsRes.groups || [];
+        courses = coursesRes.courses || [];
+        
+        renderGroups();
+        populateCourseSelect();
+      } catch (error) {
+        console.error('Error loading data:', error);
+        UI.showError('groups-container', 'Помилка завантаження даних');
+      }
+    }
+
+    function populateCourseSelect() {
+      const select = document.getElementById('groupCourse');
+      select.innerHTML = '<option value="">Оберіть курс</option>';
+      courses.filter(c => c.is_active).forEach(course => {
+        const option = document.createElement('option');
+        option.value = course.id;
+        option.textContent = course.name;
+        select.appendChild(option);
+      });
+    }
+
+    function renderGroups() {
+      const container = document.getElementById('groups-container');
+      
+      if (groups.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted"><p>Немає груп. Створіть першу групу!</p></div>';
+        return;
+      }
+
+      const table = Table.create(
+        groups,
+        [
+          { label: 'Назва', field: 'name' },
+          { label: 'Курс', render: row => row.courses?.name || '-' },
+          { label: 'Кімната', render: row => row.room || '-' },
+          { label: 'Учні', render: row => `${row.current_students || 0}/${row.max_students || 10}` },
+          { label: 'Статус', render: row => 
+            `<span class="badge ${row.is_active ? 'badge-success' : 'badge-danger'}">
+              ${row.is_active ? 'Активна' : 'Неактивна'}
+            </span>`
+          }
+        ],
+        [
+          { label: '👁️', class: 'btn-secondary', onClick: row => window.location.href = `/admin/group.html?id=${row.id}` },
+          { label: '✏️', class: 'btn-primary', onClick: editGroup },
+          { label: '🗑️', class: 'btn-danger', onClick: deleteGroup }
+        ]
+      );
+
+      container.innerHTML = '';
+      container.appendChild(table);
+    }
+
+    function showCreateModal() {
+      document.getElementById('modalTitle').textContent = 'Створити групу';
+      Form.reset('groupForm');
+      UI.showModal('groupModal');
+    }
+
+    function editGroup(group) {
+      document.getElementById('modalTitle').textContent = 'Редагувати групу';
+      Form.setData('groupForm', group);
+      UI.showModal('groupModal');
+    }
+
+    function hideModal() {
+      UI.hideModal('groupModal');
+    }
+
+    async function saveGroup() {
+      const form = document.getElementById('groupForm');
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      const data = Form.getData('groupForm');
+      const groupId = data.id;
+      delete data.id;
+
+      try {
+        if (groupId) {
+          await API.put(`/groups/${groupId}`, data);
+          UI.showAlert('Групу оновлено', 'success');
+        } else {
+          await API.post('/groups', data);
+          UI.showAlert('Групу створено', 'success');
+        }
+        
+        hideModal();
+        loadData();
+      } catch (error) {
+        UI.showAlert(error.message || 'Помилка збереження групи', 'danger');
+      }
+    }
+
+    async function deleteGroup(group) {
+      if (!confirm(`Ви впевнені, що хочете видалити групу "${group.name}"?`)) {
+        return;
+      }
+
+      try {
+        await API.delete(`/groups/${group.id}`);
+        UI.showAlert('Групу видалено', 'success');
+        loadData();
+      } catch (error) {
+        UI.showAlert(error.message || 'Помилка видалення групи', 'danger');
+      }
+    }
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', loadData);
+  </script>
+</body>
+</html>
