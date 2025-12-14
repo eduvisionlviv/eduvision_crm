@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Управління курсами - EduVision CRM</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar (Desktop) -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span>📚</span>
+        <span>EduVision CRM</span>
+      </div>
+      <nav>
+        <ul class="sidebar-nav">
+          <li><a href="/admin/dashboard.html"><span class="icon">📊</span> Головна</a></li>
+          <li><a href="/admin/courses.html" class="active"><span class="icon">📖</span> Курси</a></li>
+          <li><a href="/admin/groups.html"><span class="icon">👥</span> Групи</a></li>
+          <li><a href="/admin/students.html"><span class="icon">🎓</span> Учні</a></li>
+          <li><a href="#" id="logout-btn"><span class="icon">🚪</span> Вихід</a></li>
+        </ul>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div class="header">
+        <h1 class="header-title">Управління курсами</h1>
+        <div class="header-actions">
+          <button class="btn btn-primary" onclick="showCreateModal()">
+            <span>➕</span> Додати курс
+          </button>
+        </div>
+      </div>
+
+      <!-- Courses List -->
+      <div class="card">
+        <div class="table-container" id="courses-container">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Bottom Navigation (Mobile) -->
+    <nav class="bottom-nav">
+      <a href="/admin/dashboard.html" class="bottom-nav-item">
+        <span class="icon">📊</span>
+        <span>Головна</span>
+      </a>
+      <a href="/admin/groups.html" class="bottom-nav-item">
+        <span class="icon">👥</span>
+        <span>Групи</span>
+      </a>
+      <a href="/admin/students.html" class="bottom-nav-item">
+        <span class="icon">🎓</span>
+        <span>Учні</span>
+      </a>
+      <a href="/admin/settings.html" class="bottom-nav-item">
+        <span class="icon">⚙️</span>
+        <span>Ще</span>
+      </a>
+    </nav>
+  </div>
+
+  <!-- Create/Edit Modal -->
+  <div class="modal" id="courseModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modalTitle">Додати курс</h2>
+        <button class="modal-close" onclick="hideModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="courseForm">
+          <input type="hidden" id="courseId" name="id">
+          
+          <div class="form-group">
+            <label class="form-label">Назва курсу *</label>
+            <input type="text" class="form-input" id="courseName" name="name" required>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Опис</label>
+            <textarea class="form-textarea" id="courseDescription" name="description" rows="3"></textarea>
+          </div>
+          
+          <div class="grid grid-2">
+            <div class="form-group">
+              <label class="form-label">Тривалість (міс.)</label>
+              <input type="number" class="form-input" id="courseDuration" name="duration_months" min="1">
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Ціна (грн)</label>
+              <input type="number" class="form-input" id="coursePrice" name="price" step="0.01" min="0">
+            </div>
+          </div>
+          
+          <div class="grid grid-2">
+            <div class="form-group">
+              <label class="form-label">Вік (від)</label>
+              <input type="number" class="form-input" id="courseAgeMin" name="age_min" min="0">
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Вік (до)</label>
+              <input type="number" class="form-input" id="courseAgeMax" name="age_max" min="0">
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="hideModal()">Скасувати</button>
+        <button class="btn btn-primary" onclick="saveCourse()">Зберегти</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let courses = [];
+
+    async function loadCourses() {
+      try {
+        UI.showLoading('courses-container');
+        const response = await API.get('/courses');
+        courses = response.courses || [];
+        renderCourses();
+      } catch (error) {
+        console.error('Error loading courses:', error);
+        UI.showError('courses-container', 'Помилка завантаження курсів');
+      }
+    }
+
+    function renderCourses() {
+      const container = document.getElementById('courses-container');
+      
+      if (courses.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted"><p>Немає курсів. Створіть перший курс!</p></div>';
+        return;
+      }
+
+      const table = Table.create(
+        courses,
+        [
+          { label: 'Назва', field: 'name' },
+          { label: 'Опис', render: row => row.description || '-' },
+          { label: 'Тривалість', render: row => row.duration_months ? `${row.duration_months} міс.` : '-' },
+          { label: 'Вік', render: row => {
+            if (row.age_min && row.age_max) return `${row.age_min}-${row.age_max} років`;
+            return '-';
+          }},
+          { label: 'Ціна', render: row => row.price ? UI.formatCurrency(row.price) : '-' },
+          { label: 'Статус', render: row => 
+            `<span class="badge ${row.is_active ? 'badge-success' : 'badge-danger'}">
+              ${row.is_active ? 'Активний' : 'Неактивний'}
+            </span>`
+          }
+        ],
+        [
+          { label: '✏️', class: 'btn-primary', onClick: editCourse },
+          { label: '🗑️', class: 'btn-danger', onClick: deleteCourse }
+        ]
+      );
+
+      container.innerHTML = '';
+      container.appendChild(table);
+    }
+
+    function showCreateModal() {
+      document.getElementById('modalTitle').textContent = 'Додати курс';
+      Form.reset('courseForm');
+      UI.showModal('courseModal');
+    }
+
+    function editCourse(course) {
+      document.getElementById('modalTitle').textContent = 'Редагувати курс';
+      Form.setData('courseForm', course);
+      UI.showModal('courseModal');
+    }
+
+    function hideModal() {
+      UI.hideModal('courseModal');
+    }
+
+    async function saveCourse() {
+      const form = document.getElementById('courseForm');
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      const data = Form.getData('courseForm');
+      const courseId = data.id;
+      delete data.id;
+
+      try {
+        if (courseId) {
+          await API.put(`/courses/${courseId}`, data);
+          UI.showAlert('Курс оновлено', 'success');
+        } else {
+          await API.post('/courses', data);
+          UI.showAlert('Курс створено', 'success');
+        }
+        
+        hideModal();
+        loadCourses();
+      } catch (error) {
+        UI.showAlert(error.message || 'Помилка збереження курсу', 'danger');
+      }
+    }
+
+    async function deleteCourse(course) {
+      if (!confirm(`Ви впевнені, що хочете видалити курс "${course.name}"?`)) {
+        return;
+      }
+
+      try {
+        await API.delete(`/courses/${course.id}`);
+        UI.showAlert('Курс видалено', 'success');
+        loadCourses();
+      } catch (error) {
+        UI.showAlert(error.message || 'Помилка видалення курсу', 'danger');
+      }
+    }
+
+    // Load courses on page load
+    document.addEventListener('DOMContentLoaded', loadCourses);
+  </script>
+</body>
+</html>
