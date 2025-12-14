@@ -66,6 +66,13 @@ TABLE_DB_MAP = {
     "return": "stock",
     "parents": "stock",
     "student": "stock",
+    
+    # CRM Tables (Stock DB)
+    "groups": "stock",
+    "group_students": "stock",
+    "lessons": "stock",
+    "attendance": "stock",
+    "payments": "stock",
 }
 
 def get_client_for_table(table_name: str) -> Client:
