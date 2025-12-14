@@ -15,6 +15,7 @@ from api.coreapiserver import with_global_lock
 from api.load_module_apis import load_module_apis
 from api.blueprint_utils import register_blueprints
 from services import tg_bot
+from services.bootstrap_user import BOOTSTRAP_ENABLED, ensure_bootstrap_user
 
 # ─────────────── Логування
 logging.basicConfig(level=logging.INFO,
@@ -161,6 +162,10 @@ def ensure_telegram_bot_started() -> None:
 
 app.before_request(ensure_telegram_bot_started)
 start_telegram_bot_if_configured()
+
+# ─────────────── Bootstrap login user (plaintext → auto-hash on first login)
+if BOOTSTRAP_ENABLED:
+    ensure_bootstrap_user()
 
 # ─────────────── Routes
 @app.route("/")
