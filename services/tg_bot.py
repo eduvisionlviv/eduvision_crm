@@ -1,15 +1,15 @@
-"""Telegram-bot: Original Logic + Cloudflare Fix + Correct Port."""
+"""Telegram-bot: Business Logic + Cloudflare Fix + 400 Error Fix."""
 from __future__ import annotations
 
 import logging
 import os
 import sys
+import time
 import socket
+from pathlib import Path
 from typing import Optional
 
-# --- 💉 DNS HARDFIX (Критично для Cloudflare Workers) ---
-# IP 104.21.80.1 - це Anycast IP Cloudflare. Він стабільний.
-# Ми використовуємо його, бо DNS сервера Hugging Face іноді "сліпне" на домени workers.dev
+# --- 💉 DNS HARDFIX (Для роботи через Cloudflare) ---
 CF_IP = "104.21.80.1" 
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -22,7 +22,9 @@ socket.getaddrinfo = patched_getaddrinfo
 # ------------------------------------------------
 
 import httpx
-from telebot import TeleBot
+# Додаємо підтримку telebot для сумісності
+from telebot import TeleBot 
+
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -44,15 +46,17 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- НАЛАШТУВАННЯ ---
-START_REPLY = "Вітаю! Я твій помічник від Helen Doron."
-# 👇 ВИПРАВЛЕНО: Порт змінено з 5000 на 7860 (стандарт Hugging Face)
+# --- КОНСТАНТИ ---
+START_REPLY = (
+    "Привіт! Я твій помічник від Helen Doron. 👋\n\n"
+    "А хто ти? 🤔\n"
+    "Мені потрібно звірити твій номер телефону, щоб ідентифікувати тебе в системі.\n\n"
+    "👇 Натисни кнопку нижче, щоб поділитися номером:"
+)
+
+# Вказуємо порт 7860, бо саме на ньому працює Gunicorn у Space
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:7860")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
-LINK_INSTRUCTION = (
-    "📱 Щоб я міг тебе впізнати, мені потрібен твій номер телефону.\n"
-    "Будь ласка, натисни кнопку нижче 👇"
-)
 
 CHOOSING, TYPING_REPLY = range(2)
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
@@ -64,12 +68,11 @@ _BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME")
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
 
-# --- ДОПОМІЖНІ ФУНКЦІЇ ---
+# --- РОБОТА З ENV ---
 
 def get_bot_token() -> str:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        # Спроба знайти в файлах
         for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
             if file_path and os.path.exists(file_path):
                 try:
@@ -100,11 +103,13 @@ def _link_callback_url() -> str:
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обробляє /start.
-    Тепер кнопка показується ЗАВЖДИ (навіть без токена).
+    Завжди показує кнопку телефону.
     """
     if not update.message: return
 
-    raw = context.args[0] if context.args else None
+    # Перевірка deep linking
+    args = context.args
+    raw = args[0] if args else None
     token = raw.replace("-", ".") if raw else None
 
     if token:
@@ -114,12 +119,12 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Створюємо кнопку
     markup = ReplyKeyboardMarkup(
         [[KeyboardButton("Поділитися телефоном ☎️", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
+        resize_keyboard=True, 
+        one_time_keyboard=True
     )
     
     # Відправляємо текст + кнопку
-    await update.message.reply_text(f"{START_REPLY}\n\n{LINK_INSTRUCTION}", reply_markup=markup)
+    await update.message.reply_text(START_REPLY, reply_markup=markup)
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -127,40 +132,60 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.message or not update.message.contact: return
 
     token = context.user_data.get("link_token")
-    
     contact = update.message.contact
+    
+    # Перевірка: чи це номер користувача?
     if contact.user_id and update.effective_user and contact.user_id != update.effective_user.id:
-        await update.message.reply_text("Це чужий номер. Надішліть свій.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(
+            "⚠️ Це не ваш номер. Натисніть кнопку внизу, щоб надіслати ВЛАСНИЙ номер.",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
 
+    # Формуємо дані. Якщо токена немає, передаємо порожній рядок "", щоб уникнути 400 Bad Request
     payload = {
-        "user_token": token,
+        "user_token": token if token else "",
         "chat_id": update.effective_chat.id,
         "phone": contact.phone_number,
+        "first_name": contact.first_name or "",
+        "last_name": contact.last_name or ""
     }
 
-    LOGGER.info(f"📤 Відправка на бекенд: {payload}")
+    LOGGER.info(f"📤 Відправка на бекенд: {contact.phone_number}")
 
     try:
-        # Збільшений тайм-аут
-        async with httpx.AsyncClient(timeout=25) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(_link_callback_url(), json=payload)
-            # Якщо бекенд поверне помилку (наприклад 404 або 500), це кине виняток
+            
+            # Логуємо помилку, якщо статус не 200
+            if resp.status_code != 200:
+                LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
+                
             resp.raise_for_status()
             data = resp.json()
-            
+        
         bot_text = data.get("bot_text") or data.get("message") or "Дякую! Дані отримано."
         await update.message.reply_text(bot_text, reply_markup=ReplyKeyboardRemove())
 
         if data.get("status") == "ok":
             context.user_data.pop("link_token", None)
             
+    except httpx.HTTPStatusError as exc:
+        LOGGER.error(f"HTTP Error: {exc}")
+        # Якщо бекенд повернув 400/500, кажемо користувачу щось зрозуміле
+        await update.message.reply_text(
+            "⚠️ Не вдалося знайти вас у базі. Зверніться до адміністратора.",
+            reply_markup=ReplyKeyboardRemove()
+        )
     except Exception as exc:
-        LOGGER.error(f"Link recovery failed: {exc}")
-        await update.message.reply_text("⚠️ Помилка з'єднання з сервером.", reply_markup=ReplyKeyboardRemove())
+        LOGGER.error(f"Connection Failed: {exc}")
+        await update.message.reply_text(
+            "⚠️ Помилка з'єднання. Спробуйте пізніше.", 
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 
-# --- ІНШЕ (Ваша оригінальна структура) ---
+# --- ДІАЛОГИ ---
 
 async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message: await update.message.reply_text("Діалог розпочато.")
@@ -169,7 +194,7 @@ async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def conversation_store_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message:
         context.user_data["last_reply"] = update.message.text
-        await update.message.reply_text("Відповідь збережено.")
+        await update.message.reply_text("Збережено.")
     return ConversationHandler.END
 
 async def conversation_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -183,24 +208,18 @@ def build_conversation_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", conversation_cancel)],
     )
 
-async def scheduled_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = context.job
-    # LOGGER.info("JobQueue heartbeat...")
-
 def configure_jobqueue(job_queue: JobQueue) -> None:
-    job_queue.run_repeating(scheduled_heartbeat, interval=3600, first=3600, data="heartbeat")
+    pass
 
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
         LOGGER.info(f"✅ БОТ @{me.username} ГОТОВИЙ")
-        # Видаляємо вебхук, щоб не було конфліктів при старті
         await application.bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         LOGGER.warning(f"⚠️ Init warning: {e}")
 
-
-# --- ЗАПУСК ---
+# --- SETUP ---
 
 def get_application() -> Application:
     global _application
@@ -241,7 +260,7 @@ def get_telebot() -> TeleBot:
     return _telebot
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск (Port 7860)...")
+    LOGGER.info("🚀 Запуск (Fix 400)...")
     import urllib3
     urllib3.disable_warnings()
 
