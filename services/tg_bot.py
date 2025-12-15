@@ -48,32 +48,6 @@ _application: Optional[Application] = None
 _ENV_LOADED = False
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ─────────────── PROXY HELPER (HARDCODED FALLBACK) ───────────────
-def get_system_proxy_url() -> str:
-    """
-    Повертає адресу проксі. 
-    1. Шукає в оточенні.
-    2. Якщо немає — використовує стандарт Hugging Face (127.0.0.1:3128).
-    """
-    # 1. Спроба знайти в оточенні
-    proxy = (
-        os.getenv("TELEGRAM_PROXY")
-        or os.getenv("HTTP_PROXY")
-        or os.getenv("http_proxy")
-        or os.getenv("HTTPS_PROXY")
-        or os.getenv("https_proxy")
-    )
-    
-    if proxy:
-        LOGGER.info(f"✅ Знайдено проксі в оточенні: {proxy}")
-        return proxy
-
-    # 2. План Б: Стандартний проксі Hugging Face Spaces
-    # Це працює завжди, навіть якщо змінні оточення стерті
-    fallback = "http://127.0.0.1:3128"
-    LOGGER.warning(f"⚠️ Проксі в оточенні немає! Використовую жорсткий fallback: {fallback}")
-    return fallback
-
 # ─────────────── ENV / TOKEN ───────────────
 def _load_env_once() -> None:
     global _ENV_LOADED
@@ -107,19 +81,25 @@ def telegram_api_request(
     token = get_bot_token()
     url = API_URL_TEMPLATE.format(token=token, method=method)
     
-    # Отримуємо проксі (автоматично або fallback)
-    proxy_url = get_system_proxy_url()
-    
+    # ДІАГНОСТИКА: Перевіряємо змінні оточення
+    proxy_vars = {k: v for k, v in os.environ.items() if 'proxy' in k.lower()}
+    if proxy_vars:
+        LOGGER.info(f"🔍 Знайдені змінні проксі: {proxy_vars}")
+    else:
+        LOGGER.info("🔍 Змінні проксі відсутні (сподіваємось на прозорий інтернет).")
+
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            # Використовуємо 'proxy' (однина) - це критично для httpx v0.28+
-            with httpx.Client(proxy=proxy_url, timeout=timeout) as client:
+            # Спроба БЕЗ явного проксі. httpx візьме налаштування з системи.
+            # Якщо Supabase працює, то і це має спрацювати.
+            with httpx.Client(timeout=timeout) as client:
                 r = client.post(url, json=payload)
                 r.raise_for_status()
                 data = r.json()
                 if not data.get("ok"):
                     raise RuntimeError(data)
+                LOGGER.info("✅ Успішне з'єднання з Telegram!")
                 return data
         except Exception as e:
             last_error = e
@@ -157,7 +137,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "phone": update.message.contact.phone_number,
     }
     try:
-        # Внутрішні запити на бекенд зазвичай не потребують проксі
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
@@ -174,18 +153,12 @@ def get_application() -> Application:
         return _application
     token = get_bot_token()
     
-    proxy_url = get_system_proxy_url()
-    
-    request_kwargs = {
-        "connect_timeout": 60,
-        "read_timeout": 60,
-        "write_timeout": 60,
-    }
-    
-    if proxy_url:
-        request_kwargs["proxy_url"] = proxy_url
-
-    request = HTTPXRequest(**request_kwargs)
+    # Створюємо Request без аргументів проксі
+    request = HTTPXRequest(
+        connect_timeout=60,
+        read_timeout=60,
+        write_timeout=60,
+    )
 
     app = (
         ApplicationBuilder()
