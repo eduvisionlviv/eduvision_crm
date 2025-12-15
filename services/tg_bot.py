@@ -1,4 +1,4 @@
-"""Telegram-bot: Cloudflare Mirror Mode."""
+"""Telegram-bot: Cloudflare Mirror Mode (Auto-fix)."""
 from __future__ import annotations
 
 import logging
@@ -79,16 +79,23 @@ def get_bot_token() -> str:
 
 def get_api_base() -> str:
     """
-    Ось тут проект дізнається про вашу змінну TELEGRAM_API_BASE.
-    Якщо вона є - ми використовуємо її як адресу Telegram.
+    Розумне отримання адреси API.
+    Автоматично додає '/bot' до URL Cloudflare, якщо користувач забув.
     """
     _load_env_from_file_once()
     custom_base = os.getenv("TELEGRAM_API_BASE")
-    if custom_base:
-        # Прибираємо зайвий слеш в кінці, якщо він є
-        return custom_base.rstrip("/")
-    # Якщо змінної немає - використовуємо стандартну (яка заблокована)
-    return "https://api.telegram.org/bot"
+    
+    if not custom_base:
+        return "https://api.telegram.org/bot"
+    
+    # Чистимо адресу
+    base = custom_base.strip().rstrip("/")
+    
+    # Магічний фікс: якщо адреса не закінчується на /bot, додаємо це
+    if not base.endswith("/bot"):
+        base += "/bot"
+        
+    return base
 
 def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
@@ -124,6 +131,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = {"user_token": token, "chat_id": update.effective_chat.id, "phone": contact.phone_number}
     
     try:
+        # Тут також використовуємо проксі для безпеки, якщо воно налаштоване глобально,
+        # але бекенд у нас локальний, тому йдемо напряму.
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             data = resp.json()
@@ -160,7 +169,7 @@ def build_conversation_handler() -> ConversationHandler:
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
-        LOGGER.info(f"✅ УСПІХ: Бот підключено через дзеркало! @{me.username}")
+        LOGGER.info(f"✅ БОТ ПІДКЛЮЧЕНО! (Через дзеркало): @{me.username}")
     except Exception as e:
         LOGGER.warning(f"⚠️ Post-init check failed: {e}")
 
@@ -172,9 +181,8 @@ def get_application() -> Application:
         token = get_bot_token()
         if not token: raise RuntimeError("No Token")
 
-        # 1. Отримуємо адресу з нашої нової змінної
         api_base = get_api_base()
-        LOGGER.info(f"🌍 Використовую адресу API: {api_base}")
+        LOGGER.info(f"🌍 API Base URL: {api_base}")
 
         request = HTTPXRequest(
             connect_timeout=40.0,
@@ -183,11 +191,10 @@ def get_application() -> Application:
             connection_pool_size=10,
         )
 
-        # 2. Передаємо цю адресу в ApplicationBuilder через .base_url()
         application = (
             ApplicationBuilder()
             .token(token)
-            .base_url(api_base)  # <--- Ключовий момент
+            .base_url(api_base)
             .request(request)
             .get_updates_request(request)
             .post_init(on_post_init)
@@ -202,9 +209,8 @@ def get_application() -> Application:
     return _application
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск бота (Cloudflare Mirror Mode)...")
+    LOGGER.info("🚀 Запуск бота...")
     
-    # Вимикаємо зайві попередження
     import urllib3
     urllib3.disable_warnings()
 
