@@ -4,6 +4,7 @@ import re
 import secrets
 import datetime as dt
 import logging
+import json
 from typing import List, Optional, Tuple
 
 from flask import Blueprint, request, jsonify, make_response
@@ -22,6 +23,8 @@ log = logging.getLogger("login.join")
 
 # ── Cookie / TTL
 COOKIE_NAME     = "edu_session"
+ROLE_COOKIE     = "edu_role"
+CENTER_COOKIE   = "edu_center"
 AUTH_TTL_HOURS  = int(os.getenv("AUTH_TTL_HOURS", "168"))  # 7 днів
 EMAIL_RX        = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DEBUG_ERRORS    = os.getenv("DEBUG_ERRORS", "0") == "1"
@@ -43,6 +46,21 @@ ROLE_BY_TABLE = {
     "contacts": "def",
     "parents":  "parent",
     "student":  "student",
+}
+
+ROLE_NORMALIZE = {
+    "contacts": "def",
+    "def": "def",
+    "admin": "def",
+    "manager": "def",
+    "lc_manager": "def",
+    "teacher": "teacher",
+    "parent": "parent",
+    "parents": "parent",
+    "student": "student",
+    "child": "student",
+    "super_admin": "super_admin",
+    "superadmin": "super_admin",
 }
 
 FORGOT_GENERIC_MSG     = "Якщо акаунт існує — ми надіслали інструкції з відновлення."
@@ -196,6 +214,32 @@ def _set_cookie(resp, token: str):
     return resp
 
 
+def _set_role_cookie(resp, role: Optional[str]):
+    if role:
+        resp.set_cookie(
+            ROLE_COOKIE, role,
+            max_age=AUTH_TTL_HOURS * 3600, path="/",
+            httponly=True, secure=COOKIE_SECURE, samesite="Lax"
+        )
+    else:
+        resp.set_cookie(ROLE_COOKIE, "", path="/", max_age=0,
+                        httponly=True, secure=COOKIE_SECURE, samesite="Lax")
+    return resp
+
+
+def _set_center_cookie(resp, center_id: Optional[str]):
+    if center_id:
+        resp.set_cookie(
+            CENTER_COOKIE, str(center_id),
+            max_age=AUTH_TTL_HOURS * 3600, path="/",
+            httponly=True, secure=COOKIE_SECURE, samesite="Lax"
+        )
+    else:
+        resp.set_cookie(CENTER_COOKIE, "", path="/", max_age=0,
+                        httponly=True, secure=COOKIE_SECURE, samesite="Lax")
+    return resp
+
+
 def _payload_from_row(row: dict, table: Optional[str] = None):
     payload = {
         "user_id":      row.get("user_id"),
@@ -207,7 +251,18 @@ def _payload_from_row(row: dict, table: Optional[str] = None):
     }
     if not payload["user_access"]:
         payload["user_access"] = _role_for_table(payload["user_table"])
+
+    roles = _roles_from_account(row)
+    if roles:
+        payload["available_roles"] = roles
+        payload["user_access"] = row.get("active_role") or payload["user_access"] or roles[0]
+
+    center_id = row.get("center_id") or _extract_center(row)
+    if center_id:
+        payload["center_id"] = center_id
+
     payload["need_tg_setup"] = _need_tg_setup(row)
+    payload["is_super_admin"] = "super_admin" in roles
     return payload
 
 
@@ -313,6 +368,71 @@ def _role_for_table(table: Optional[str]) -> Optional[str]:
     return ROLE_BY_TABLE.get(table)
 
 
+def _normalize_role_value(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+    key = str(raw).strip().lower()
+    return ROLE_NORMALIZE.get(key)
+
+
+def _roles_from_account(row: dict) -> List[str]:
+    roles: List[str] = []
+
+    def add(value):
+        role = _normalize_role_value(value)
+        if role and role not in roles:
+            roles.append(role)
+
+    primary = row.get("user_access") or row.get("role") or row.get("user_role")
+    add(primary)
+
+    extra = row.get("extra_access")
+    if isinstance(extra, dict):
+        for key, enabled in extra.items():
+            if enabled:
+                add(key)
+    elif isinstance(extra, list):
+        for item in extra:
+            add(item)
+    elif isinstance(extra, str):
+        text = extra.strip()
+        if text:
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    for key, enabled in parsed.items():
+                        if enabled:
+                            add(key)
+                elif isinstance(parsed, list):
+                    for item in parsed:
+                        add(item)
+            except Exception:
+                for piece in re.split(r"[,\s]+", text):
+                    add(piece)
+
+    if not roles:
+        add(_role_for_table(row.get("user_table")))
+
+    return roles
+
+
+def _extract_center(row: dict) -> Optional[str]:
+    for key in ("center_id", "centre_id", "lc_id", "branch_id", "org_id", "tenant_id", "school_id", "base_id"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _center_label(row: dict) -> Optional[str]:
+    for key in ("center_name", "centre_name", "lc_name", "branch_name", "org_name", "tenant_name"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+
 def _sign_user_token(user_id: int) -> str:
     serializer = _get_link_serializer()
     return serializer.dumps({"user_id": user_id})
@@ -339,6 +459,9 @@ def _normalize_account(table: str, row: dict) -> dict:
     row["user_table"] = table
     if not row.get("user_access"):
         row["user_access"] = _role_for_table(table)
+    row["available_roles"] = _roles_from_account(row)
+    row["center_id"] = row.get("center_id") or _extract_center(row)
+    row["center_label"] = _center_label(row)
     return row
 
 
@@ -362,16 +485,26 @@ def _find_accounts_by_email(email: str) -> List[dict]:
     return accounts
 
 
-def _profiles_from_accounts(accounts: List[dict]) -> List[dict]:
-    profiles = []
+def _profiles_from_accounts(accounts: List[dict], expand_roles: bool = False) -> List[dict]:
+    profiles: List[dict] = []
     for acc in accounts:
         row = acc.get("row") or {}
-        profiles.append({
+        roles = row.get("available_roles") or _roles_from_account(row)
+        base_profile = {
             "user_id":   row.get("user_id"),
             "user_name": row.get("user_name") or row.get("user_email"),
             "role":      row.get("user_access") or _role_for_table(acc.get("table")),
             "table":     acc.get("table"),
-        })
+            "center_id": row.get("center_id") or _extract_center(row),
+            "center_label": row.get("center_label") or _center_label(row),
+            "roles": roles,
+        }
+
+        if expand_roles and roles and len(roles) > 1:
+            for r in roles:
+                profiles.append({**base_profile, "role": r})
+        else:
+            profiles.append(base_profile)
     return profiles
 
 
@@ -418,7 +551,22 @@ def _get_user_for_request() -> Optional[dict]:
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return None
-    return _resolve_user_by_token(token)
+    row = _resolve_user_by_token(token)
+    if not row:
+        return None
+
+    # застосувати обрану роль та навчальний центр, якщо вони дозволені
+    roles = _roles_from_account(row)
+    requested_role = _normalize_role_value(request.cookies.get(ROLE_COOKIE))
+    if requested_role and requested_role in roles:
+        row["active_role"] = requested_role
+        row["user_access"] = requested_role
+
+    center_id = request.cookies.get(CENTER_COOKIE)
+    if center_id:
+        row["center_id"] = center_id
+
+    return row
 
 
 def _send_tg_reset(chat_id: str, link: str) -> None:
@@ -559,6 +707,8 @@ def join():
     pwd   =  (b.get("password") or b.get("pass_email") or "")
     target_table = (b.get("target_table") or "").strip()
     target_user_id = b.get("target_user_id")
+    session_role = _normalize_role_value(b.get("as_role"))
+    requested_center = str(b.get("center_id") or "").strip() or None
 
     if not email or not pwd:
         return _fail_invalid()
@@ -590,31 +740,55 @@ def join():
 
         matched.append(acc)
 
+    role_profiles = _profiles_from_accounts(matched, expand_roles=True)
+
     if target_table and target_user_id is not None:
-        target = next(
-            (acc for acc in matched
-             if acc.get("table") == target_table and str(acc.get("row", {}).get("user_id")) == str(target_user_id)),
-            None,
-        )
-        if not target:
+        role_profiles = [
+            p for p in role_profiles
+            if p.get("table") == target_table and str(p.get("user_id")) == str(target_user_id)
+        ]
+        matched = [
+            acc for acc in matched
+            if acc.get("table") == target_table
+            and str(acc.get("row", {}).get("user_id")) == str(target_user_id)
+        ]
+        if not matched:
             return _fail_invalid()
-        matched = [target]
 
     if not matched:
         log.info("login fail (bad pwd): %s", _mask_email(email))
         return _fail_invalid()
 
-    if len(matched) > 1:
+    multiple_accounts = len(matched) > 1
+    needs_choice = len(role_profiles) > 1
+    if multiple_accounts or (needs_choice and not session_role):
         return jsonify(
             choose_profile=True,
-            message="Хто ви зараз? Оберіть профіль для входу.",
-            profiles=_profiles_from_accounts(matched),
+            message="Хто ви зараз? Оберіть профіль та роль для входу.",
+            profiles=role_profiles,
         ), 200
 
     account = matched[0]
     table = account["table"]
     row = account["row"]
     client = get_client_for_table(table)
+
+    allowed_roles = row.get("available_roles") or _roles_from_account(row)
+    if session_role and session_role not in allowed_roles:
+        return jsonify(error="forbidden_role", message="Ви не маєте доступу до цієї ролі."), 403
+
+    chosen_role = session_role or (allowed_roles[0] if allowed_roles else row.get("user_access"))
+
+    current_center = row.get("center_id") or _extract_center(row)
+    if requested_center and requested_center != current_center and "super_admin" not in allowed_roles:
+        return jsonify(error="forbidden_center", message="Центр не належить цьому акаунту."), 403
+
+    if needs_choice and not chosen_role:
+        return jsonify(
+            choose_profile=True,
+            message="Потрібно обрати роль для входу.",
+            profiles=role_profiles,
+        ), 200
 
     try:
         token, _ = _issue_session(client, row["user_id"], table)
@@ -625,9 +799,15 @@ def join():
         log.error("set auth token failed for user_id=%s (%s): %s", row.get("user_id"), table, e)
         return jsonify(body), 500
 
+    row["active_role"] = chosen_role
+    row["center_id"] = requested_center or row.get("center_id") or current_center or _extract_center(row)
+
     payload = _payload_from_row(row, table)
     resp = make_response(jsonify(ok=True, need_tg_setup=payload["need_tg_setup"], user_table=table))
-    return _set_cookie(resp, token)
+    _set_cookie(resp, token)
+    _set_role_cookie(resp, chosen_role)
+    _set_center_cookie(resp, payload.get("center_id"))
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────
@@ -649,6 +829,41 @@ def me():
 
 
 # ─────────────────────────────────────────────────────────────
+# POST /api/login/switch_profile — зміна активної ролі/центру
+# ─────────────────────────────────────────────────────────────
+@bp.post("/switch_profile")
+def switch_profile():
+    user = _get_user_for_request()
+    if not user:
+        return jsonify(error="unauthorized"), 401
+
+    data = request.get_json(silent=True) or {}
+    requested_role = _normalize_role_value(data.get("role"))
+    requested_center = str(data.get("center_id") or "").strip() or None
+
+    allowed_roles = _roles_from_account(user)
+    if requested_role and requested_role not in allowed_roles:
+        return jsonify(error="forbidden_role", message="Ви не маєте такої ролі."), 403
+
+    # супер-адмін може перемикати центри, інші — лише свій
+    current_center = user.get("center_id") or _extract_center(user)
+    if requested_center and requested_center != current_center and "super_admin" not in allowed_roles:
+        return jsonify(error="forbidden_center", message="Перемикання центру доступне лише супер-адміну."), 403
+
+    if requested_role:
+        user["user_access"] = requested_role
+        user["active_role"] = requested_role
+
+    if requested_center:
+        user["center_id"] = requested_center
+
+    resp = make_response(jsonify(ok=True, **_payload_from_row(user)))
+    _set_role_cookie(resp, requested_role)
+    _set_center_cookie(resp, user.get("center_id"))
+    return resp
+
+
+# ─────────────────────────────────────────────────────────────
 # POST /api/login/logout — вихід
 # ─────────────────────────────────────────────────────────────
 @bp.post("/logout")
@@ -664,6 +879,10 @@ def logout():
                 log.info("logout token clear failed for %s: %s", table, e)
     resp = make_response(jsonify(ok=True))
     resp.set_cookie(COOKIE_NAME, "", path="/", max_age=0,
+                    httponly=True, secure=COOKIE_SECURE, samesite="Lax")
+    resp.set_cookie(ROLE_COOKIE, "", path="/", max_age=0,
+                    httponly=True, secure=COOKIE_SECURE, samesite="Lax")
+    resp.set_cookie(CENTER_COOKIE, "", path="/", max_age=0,
                     httponly=True, secure=COOKIE_SECURE, samesite="Lax")
     return resp
 
