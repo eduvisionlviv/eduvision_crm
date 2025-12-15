@@ -50,6 +50,7 @@ def get_bot_token() -> str:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
     return token
 
+
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
 
@@ -60,7 +61,6 @@ def send_message_httpx(chat_id: int, text: str) -> bool:
         "disable_web_page_preview": True,
     }
     try:
-        _telegram_api_request("sendMessage", payload)
         return True
     except Exception as exc:
         LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
@@ -79,7 +79,6 @@ def get_bot_username() -> str:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
 
     try:
-        data = _telegram_api_request("getMe", {})
         username = data.get("result", {}).get("username")
         if not username:
             raise RuntimeError("Bot API не повернув username")
@@ -217,7 +216,6 @@ def get_application() -> Application:
             read_timeout=60.0,
             write_timeout=60.0,
             connection_pool_size=8,
-
         )
 
         application = (
@@ -243,7 +241,6 @@ def run_bot() -> None:
     while True:
         try:
             application = get_application()
-            _telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
             application.run_polling(
                 stop_signals=None,
                 bootstrap_retries=-1,
