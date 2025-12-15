@@ -1,16 +1,13 @@
-"""Telegram-bot: Business Logic + Cloudflare Fix + Always Ask Contact."""
+"""Telegram-bot: Original Logic + Cloudflare Fix + Always Button."""
 from __future__ import annotations
 
 import logging
 import os
 import sys
-import time
 import socket
-from pathlib import Path
 from typing import Optional
 
-# --- 💉 DNS HARDFIX (Лікуємо сліпоту сервера Hugging Face) ---
-# Це критично для роботи через Cloudflare Workers
+# --- 💉 DNS HARDFIX (Критично для Cloudflare) ---
 CF_IP = "104.21.80.1" 
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -23,9 +20,7 @@ socket.getaddrinfo = patched_getaddrinfo
 # ------------------------------------------------
 
 import httpx
-# Додаємо підтримку telebot для сумісності з вашим старим кодом
-from telebot import TeleBot 
-
+from telebot import TeleBot
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -47,62 +42,40 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- КОНСТАНТИ ---
-# Текст, який буде завжди при старті
-START_REPLY = (
-    "Вітаю! Я твій помічник від Helen Doron.\n\n"
-    "Щоб я міг тебе впізнати та надати доступ до інформації, мені потрібен твій номер телефону.\n"
-    "👇 Будь ласка, натисни кнопку нижче:"
-)
-
+# --- НАЛАШТУВАННЯ ---
+START_REPLY = "Вітаю! Я твій помічник від Helen Doron."
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
+LINK_INSTRUCTION = (
+    "📱 Щоб я міг тебе впізнати, мені потрібен твій номер телефону.\n"
+    "Будь ласка, натисни кнопку нижче 👇"
+)
 
 CHOOSING, TYPING_REPLY = range(2)
-
-# ✅ ОБОВ'ЯЗКОВА ЗМІННА
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 _application: Optional[Application] = None
 _telebot: Optional[TeleBot] = None
 _BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME")
-_ENV_LOADED = False
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
 
-# --- РОБОТА З ENV ТА URL ---
-
-def _load_env_from_file_once() -> None:
-    global _ENV_LOADED
-    if _ENV_LOADED: return
-    env_path = os.getenv("ENV_FILE")
-    env_file = Path(env_path) if env_path else _PROJECT_ROOT / ".env"
-    if env_file.is_file():
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                if not line or line.lstrip().startswith("#") or "=" not in line: continue
-                key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-        except Exception: pass
-    _ENV_LOADED = True
+# --- ДОПОМІЖНІ ФУНКЦІЇ ---
 
 def get_bot_token() -> str:
-    _load_env_from_file_once()
-    for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
-        if file_path:
-            try:
-                if t := Path(file_path).read_text(encoding="utf-8").strip(): return t
-            except FileNotFoundError: pass
-    for key in ["TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN"]:
-        if val := os.getenv(key): return val.strip()
-    LOGGER.error("❌ TELEGRAM_BOT_TOKEN не знайдено!")
-    return "" 
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        # Спробуємо знайти в файлах (для Docker Secrets)
+        for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
+            if file_path and os.path.exists(file_path):
+                with open(file_path, 'r') as f: return f.read().strip()
+        LOGGER.error("❌ TELEGRAM_BOT_TOKEN не знайдено!")
+        return ""
+    return token
 
 def get_api_base() -> str:
-    """Визначає адресу API (Cloudflare Mirror)."""
-    _load_env_from_file_once()
+    """Визначає правильну адресу API (Cloudflare Mirror)."""
     custom_base = os.getenv("TELEGRAM_API_BASE")
     if not custom_base:
         return "https://api.telegram.org/bot"
@@ -117,95 +90,78 @@ def _link_callback_url() -> str:
     return f"{base}{LINK_RECOVERY_PATH}"
 
 
-# --- ХЕНДЛЕРИ (Оновлена логіка кнопок) ---
+# --- ХЕНДЛЕРИ ---
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обробляє /start.
-    Тепер кнопка показується ЗАВЖДИ.
+    МОДИФІКАЦІЯ: Тепер завжди показує кнопку телефону.
     """
     if not update.message: return
 
-    # Перевіряємо, чи є токен у посиланні (deep linking)
-    args = context.args
-    raw = args[0] if args else None
+    # Перевірка deep linking
+    raw = context.args[0] if context.args else None
     token = raw.replace("-", ".") if raw else None
 
-    # Якщо токен є — запам'ятовуємо його, але кнопку показуємо все одно
     if token:
         context.user_data["link_token"] = token
-        LOGGER.info(f"🔑 Отримано токен при старті: {token}")
+        LOGGER.info(f"🔑 Отримано токен: {token}")
 
-    # --- СТВОРЕННЯ КНОПКИ ---
-    # request_contact=True змушує Telegram надіслати картку контакту
+    # Створюємо кнопку (завжди!)
     markup = ReplyKeyboardMarkup(
         [[KeyboardButton("Поділитися телефоном ☎️", request_contact=True)]],
-        resize_keyboard=True, 
-        one_time_keyboard=True
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
     
-    # Відправляємо привітання З КНОПКОЮ
-    await update.message.reply_text(START_REPLY, reply_markup=markup)
+    # Відправляємо інструкцію і кнопку
+    await update.message.reply_text(f"{START_REPLY}\n\n{LINK_INSTRUCTION}", reply_markup=markup)
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробка отриманого контакту."""
+    """Передає контакт у бекенд."""
     if not update.message or not update.message.contact: return
 
-    user_token = context.user_data.get("link_token")
-    contact = update.message.contact
+    token = context.user_data.get("link_token")
+    # Якщо токена немає, все одно спробуємо відправити (бекенд розбереться по chat_id/телефону)
     
-    # Перевірка "свій/чужий" номер
+    contact = update.message.contact
     if contact.user_id and update.effective_user and contact.user_id != update.effective_user.id:
-        await update.message.reply_text(
-            "⚠️ Це не ваш номер. Будь ласка, натисніть кнопку внизу, щоб надіслати ВЛАСНИЙ номер.",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await update.message.reply_text("Це чужий номер. Надішліть свій.", reply_markup=ReplyKeyboardRemove())
         return
 
-    # Готуємо дані для CRM
     payload = {
-        "user_token": user_token,
+        "user_token": token,
         "chat_id": update.effective_chat.id,
         "phone": contact.phone_number,
-        "first_name": contact.first_name,
-        "last_name": contact.last_name
     }
 
-    LOGGER.info(f"📤 Відправка контакту на сервер: {contact.phone_number}")
-
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             data = resp.json()
-        
-        # Відповідь від сервера (має бути привітання з іменем)
-        bot_text = data.get("bot_text") or data.get("message") or "Дякую! Ваш номер отримано."
-        
+            
+        bot_text = data.get("bot_text") or data.get("message") or "Дякую! Дані отримано."
         await update.message.reply_text(bot_text, reply_markup=ReplyKeyboardRemove())
 
         if data.get("status") == "ok":
             context.user_data.pop("link_token", None)
             
     except Exception as exc:
-        LOGGER.error(f"❌ Помилка CRM: {exc}")
-        await update.message.reply_text(
-            "⚠️ Вибачте, не можу з'єднатися з базою даних. Спробуйте пізніше.", 
-            reply_markup=ReplyKeyboardRemove()
-        )
+        LOGGER.error(f"Link recovery failed: {exc}")
+        await update.message.reply_text("⚠️ Помилка з'єднання з сервером.", reply_markup=ReplyKeyboardRemove())
 
 
-# --- ДІАЛОГИ ---
+# --- ІНШЕ (З вашого старого коду) ---
 
 async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message:
-        await update.message.reply_text("Це демо-діалог. Напишіть щось.")
+    if update.message: await update.message.reply_text("Діалог розпочато.")
     return TYPING_REPLY
 
 async def conversation_store_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message:
         context.user_data["last_reply"] = update.message.text
-        await update.message.reply_text("Збережено.")
+        await update.message.reply_text("Відповідь збережено.")
     return ConversationHandler.END
 
 async def conversation_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -219,23 +175,29 @@ def build_conversation_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", conversation_cancel)],
     )
 
+async def scheduled_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
+    job = context.job
+    # LOGGER.info("JobQueue heartbeat...")
+
 def configure_jobqueue(job_queue: JobQueue) -> None:
-    pass 
+    job_queue.run_repeating(scheduled_heartbeat, interval=3600, first=3600, data="heartbeat")
 
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
-        LOGGER.info(f"✅ БОТ @{me.username} АКТИВНИЙ")
+        LOGGER.info(f"✅ БОТ @{me.username} ГОТОВИЙ")
     except Exception as e:
-        LOGGER.warning(f"⚠️ Init Warning: {e}")
+        LOGGER.warning(f"⚠️ Init warning: {e}")
 
-# --- SETUP ---
+
+# --- ЗАПУСК ---
 
 def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
         api_base = get_api_base()
+        
         LOGGER.info(f"🌍 API Base: {api_base}")
 
         request = HTTPXRequest(
@@ -269,7 +231,7 @@ def get_telebot() -> TeleBot:
     return _telebot
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск...")
+    LOGGER.info("🚀 Запуск (Original Logic + Fixes)...")
     import urllib3
     urllib3.disable_warnings()
 
