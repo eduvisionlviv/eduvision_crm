@@ -41,7 +41,6 @@ CHOOSING, TYPING_REPLY = range(2)
 _application: Optional[Application] = None
 _BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME") or os.getenv(
     "TELEGRAM_BOT_USERNAME"
-)
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 __all__ = ["run_bot", "get_application"]
@@ -141,6 +140,63 @@ def get_bot_status() -> dict:
         status[
             "message"
         ] = "TELEGRAM_BOT_TOKEN не задано. Додайте TELEGRAM_BOT_TOKEN (або BOT_TOKEN / TELEGRAM_TOKEN)."
+        return status
+
+    try:
+        status["bot_username"] = get_bot_username()
+        status["status"] = "ok"
+    except Exception as exc:
+        status["status"] = "error"
+        status["message"] = str(exc)
+
+    return status
+
+
+def send_message_httpx(chat_id: int, text: str) -> bool:
+    """Надсилає повідомлення через Bot API без запуску поллінгу."""
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        return True
+    except Exception as exc:
+        LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
+        return False
+
+
+def get_bot_username() -> str:
+    """Повертає username бота або піднімає виняток із поясненням."""
+
+    global _BOT_USERNAME
+    if _BOT_USERNAME:
+        return _BOT_USERNAME
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
+
+    try:
+        username = data.get("result", {}).get("username")
+        if not username:
+            raise RuntimeError("Bot API не повернув username")
+        _BOT_USERNAME = username
+        return username
+    except Exception as exc:
+        raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
+
+
+def get_bot_status() -> dict:
+    """Повертає зрозумілий статус налаштування Telegram-бота."""
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    status: dict = {"configured": bool(token)}
+
+    if not token:
+        status["message"] = "TELEGRAM_BOT_TOKEN не задано. Додайте токен у змінні середовища."
         return status
 
     try:
@@ -287,7 +343,7 @@ def run_bot() -> None:
     while True:
         try:
             application = get_application()
-            telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
+main
             application.run_polling(
                 stop_signals=None,
                 bootstrap_retries=-1,
