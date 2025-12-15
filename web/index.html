@@ -216,7 +216,8 @@
       def: "Я працівник",
       teacher: "Я вчитель",
       parent: "Я мама/батько",
-      student: "Я учень"
+      student: "Я учень",
+      super_admin: "Я супер-адмін"
     };
 
     function pickProfile(profiles, title){
@@ -255,12 +256,20 @@
 
         cancelBtn.onclick = () => choose(null);
 
+        const renderLabel = (p) => {
+          const roleKey = p.role || p.table;
+          const label = ROLE_LABEL[roleKey] || ROLE_LABEL[p.table] || (p.role || p.table || "Профіль");
+          const center = p.center_label || (p.center_id ? `Центр: ${p.center_id}` : "");
+          const suffix = center ? ` · ${center}` : "";
+          return `${label}${suffix}`;
+        };
+
         if(profiles.length <= 3){
           profiles.forEach(p => {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "btn btn--blue btn--md picker-option";
-            const label = ROLE_LABEL[p.role] || ROLE_LABEL[p.table] || (p.role || p.table || "Профіль");
+            const label = renderLabel(p);
             btn.innerHTML = `${label}<small>${p.user_name || "Без імені"} · ID: ${p.user_id}</small>`;
             btn.onclick = () => choose(p);
             optionsBox.appendChild(btn);
@@ -271,7 +280,7 @@
           select.className = "input picker-select";
           select.innerHTML = `<option value="">Оберіть профіль</option>` +
             profiles.map((p,i)=>{
-              const label = ROLE_LABEL[p.role] || ROLE_LABEL[p.table] || (p.role || p.table || "Профіль");
+              const label = renderLabel(p);
               return `<option value="${i}">${label} — ${p.user_name || "Без імені"} (ID: ${p.user_id})</option>`;
             }).join("");
           optionsBox.appendChild(select);
@@ -318,7 +327,13 @@
         if(d.choose_profile){
           const choice = await pickProfile(d.profiles, d.message || "Хто ви зараз?");
           if(!choice) return false;
-          return doLogin({ ...body, target_user_id: choice.user_id, target_table: choice.table });
+          return doLogin({
+            ...body,
+            target_user_id: choice.user_id,
+            target_table: choice.table,
+            as_role: choice.role,
+            center_id: choice.center_id,
+          });
         }
         if(!r.ok) return alert(d.message || d.error || "Помилка входу"), false;
         const profile = await fetchProfile();
