@@ -1,83 +1,112 @@
 import asyncio
 import logging
 import time
+import os
 import sys
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+
+# Імпорти Telegram
+from telegram import Update, BotCommand
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    CallbackQueryHandler, 
+    ContextTypes, 
+    filters
+)
 from telegram.request import HTTPXRequest
 
-# Налаштування логування
+# --- НАЛАШТУВАННЯ ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Твій токен (бажано брати з змінних середовища, але поки лишаємо як є або встав сюди свій механізм отримання)
-# ЗАМІНИ ЦЕЙ РЯДОК НА СВІЙ МЕТОД ОТРИМАННЯ ТОКЕНА, ЯКЩО ВІН ІНШИЙ
-import os
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TOKEN_HERE_IF_NOT_ENV")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "ВСТАВТЕ_ТОКЕН_ЯКЩО_НЕМАЄ_В_ENV")
+
+# --- 1. ТУТ ВАШІ ФУНКЦІЇ (ХЕНДЛЕРИ) ---
+# Скопіюйте сюди ваші функції: start, button_click, handle_message тощо з попереднього файлу.
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка команди /start."""
-    user = update.effective_user
-    await update.message.reply_html(
-        rf"Привіт, {user.mention_html()}! Бот працює стабільно."
-    )
+    """Приклад базової команди"""
+    await update.message.reply_text("Бот на зв'язку! Система стабілізована.")
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Я — тестовий бот HDE. Моя мережа тепер працює стабільно.")
+
+# Якщо у вас були функції обробки кнопок або тексту, додайте їх тут 👇
+# async def my_custom_handler(update, context): ...
+
+
+# --- 2. ЛОГІКА ЗАПУСКУ (SYSTEM CORE) ---
 async def run_bot_logic():
-    """Основна логіка запуску бота з налаштуваннями мережі."""
+    """Налаштування та запуск бота."""
     
-    # 1. Налаштування запитів. Збільшуємо тайм-аути для повільних мереж.
+    # Посилені налаштування мережі (щоб не було помилок Timeout)
     trequest = HTTPXRequest(
-        connection_pool_size=10,
-        connect_timeout=20.0, # Даємо 20 секунд на підключення
-        read_timeout=20.0,    # Даємо 20 секунд на відповідь
-        write_timeout=20.0
+        connection_pool_size=20, # Більше з'єднань
+        connect_timeout=30.0,    # Більше часу на підключення
+        read_timeout=30.0,
+        write_timeout=30.0
     )
 
-    # 2. Створення додатку
+    # Ініціалізація Application
     application = Application.builder().token(TOKEN).request(trequest).build()
 
-    # 3. Додавання хендлерів
+    # --- 3. РЕЄСТРАЦІЯ ХЕНДЛЕРІВ ---
+    # Тут ми підключаємо функції до команд
+    
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    # 👇 ВІДНОВІТЬ ТУТ ВАШІ ХЕНДЛЕРИ 👇
+    # Наприклад:
+    # application.add_handler(CallbackQueryHandler(button_handler))
+    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    
+    # Встановлення меню команд (кнопка Menu зліва внизу)
+    await application.bot.set_my_commands([
+        BotCommand("start", "Перезапустити бота"),
+        BotCommand("help", "Допомога"),
+    ])
 
-    # 4. Запуск (Polling)
-    # drop_pending_updates=True, щоб бот не спамив відповідями на старі команди після перезапуску
-    logger.info("🚀 Спроба з'єднання з Telegram API...")
+    logger.info("🚀 Бот запускається...")
+    
+    # Ініціалізація та старт
     await application.initialize()
     await application.start()
     
-    # Це запустить постійне опитування. 
-    # Updater.start_polling() в нових версіях робиться через application.updater
+    # Запуск polling (очищаємо чергу старих апдейтів, щоб не спамив при старті)
     await application.updater.start_polling(drop_pending_updates=True)
     
-    # Тримаємо бота запущеним доки не буде зупинки
-    # Використовуємо Event, щоб не блокувати потік наглухо
+    # Тримаємо процес живим
     stop_signal = asyncio.Event()
     await stop_signal.wait()
 
-    # Коректне завершення (якщо дійдемо сюди)
+    # Коректна зупинка
     await application.updater.stop()
     await application.stop()
     await application.shutdown()
 
+# --- 4. ЗАХИСТ ВІД ПАДІННЯ (WATCHDOG) ---
 def start_bot_process():
-    """Функція-обгортка для запуску в окремому потоці/процесі."""
+    """Ця функція перезапускає бота, якщо він впаде."""
     retry_count = 0
     while True:
         try:
-            # Створюємо новий Event Loop для кожної спроби
-            # Це вирішує проблему 'Event loop is closed'
+            # Створюємо чистий Event Loop (вирішує проблему "Loop closed")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            logger.info(f"🔄 Запуск циклу бота (Спроба {retry_count + 1})...")
+            if retry_count > 0:
+                logger.warning(f"🔄 Автоматичний перезапуск бота (Спроба #{retry_count})")
+            
             loop.run_until_complete(run_bot_logic())
             
         except Exception as e:
-            logger.error(f"❌ Критична помилка бота: {e}")
-            logger.error("Перезапуск через 10 секунд...")
+            logger.error(f"❌ Бот впав з помилкою: {e}")
+            logger.error("⏳ Чекаємо 10 секунд перед перезапуском...")
             time.sleep(10)
             retry_count += 1
         finally:
