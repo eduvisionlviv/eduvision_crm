@@ -851,3 +851,17 @@ def link_recovery():
 
     clear_cache("contacts")
     return jsonify(status="ok", bot_text=TG_SUCCESS_TEXT)
+
+
+# ─────────────────────────────────────────────────────────────
+# GET /api/tg/status — стан Telegram-бота (для діагностики)
+# ─────────────────────────────────────────────────────────────
+@bp_tg.get("/status")
+def tg_status():
+    try:
+        info = tg_bot.get_bot_status()
+    except Exception as exc:
+        log.error("tg status failed: %s", exc)
+        return jsonify(status="error", message=str(exc)), 500
+
+    return jsonify(info)
