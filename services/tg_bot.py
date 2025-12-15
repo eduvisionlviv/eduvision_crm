@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -39,11 +40,9 @@ LINK_INSTRUCTION = (
 CHOOSING, TYPING_REPLY = range(2)
 
 _application: Optional[Application] = None
-_BOT_USERNAME: Optional[str] = (
-    os.getenv("BOT_USERNAME")
-    or os.getenv("TELEGRAM_BOT_USERNAME")
-    or os.getenv("TELEGRAM_USERNAME")
-)
+_ENV_LOADED = False
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_BOT_USERNAME: Optional[str] = None
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 __all__ = ["run_bot", "get_application"]
@@ -51,10 +50,28 @@ __all__ = ["run_bot", "get_application"]
 def get_bot_token() -> str:
     """Повертає токен бота з підтримкою кількох назв змінних."""
 
+    _load_env_from_file_once()
+
+    file_candidates = [
+        os.getenv("TELEGRAM_BOT_TOKEN_FILE"),
+        os.getenv("BOT_TOKEN_FILE"),
+        os.getenv("TELEGRAM_TOKEN_FILE"),
+    ]
+    for file_path in file_candidates:
+        if file_path:
+            try:
+                token = Path(file_path).read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+            except FileNotFoundError:
+                LOGGER.warning("Файл із токеном Telegram не знайдено: %s", file_path)
+
     candidates = [
         "TELEGRAM_BOT_TOKEN",
         "BOT_TOKEN",
         "TELEGRAM_TOKEN",
+        "TELEGRAM_API_TOKEN",
+        "TELEGRAM_BOT_API_TOKEN",
     ]
 
     for key in candidates:
@@ -65,6 +82,35 @@ def get_bot_token() -> str:
     raise RuntimeError(
         "TELEGRAM_BOT_TOKEN не задано. Вкажіть TELEGRAM_BOT_TOKEN (або BOT_TOKEN / TELEGRAM_TOKEN)."
     )
+
+
+def _load_env_from_file_once() -> None:
+    """Ледачо підвантажує .env один раз, щоб зчитати токен/username."""
+
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+
+    env_path = os.getenv("ENV_FILE")
+    if env_path:
+        env_file = Path(env_path)
+    else:
+        env_file = _PROJECT_ROOT / ".env"
+
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if not line or line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Не вдалося завантажити .env (%s): %s", env_file, exc)
+
+    _ENV_LOADED = True
+
 
 def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, retries: int = 3) -> dict:
     """Викликає Telegram Bot API через httpx з повторними спробами."""
@@ -88,8 +134,10 @@ def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, r
 
     raise RuntimeError(last_error or "Unknown Telegram API error")
 
+
 # Синонім для зворотної сумісності і уникнення NameError у поточних лонгрunning-процесах
 _telegram_api_request = telegram_api_request
+
 
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
@@ -107,10 +155,18 @@ def send_message_httpx(chat_id: int, text: str) -> bool:
         LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
         return False
 
+
 def get_bot_username() -> str:
     """Повертає username бота або піднімає виняток із поясненням."""
 
     global _BOT_USERNAME
+    _load_env_from_file_once()
+    if not _BOT_USERNAME:
+        _BOT_USERNAME = (
+            os.getenv("BOT_USERNAME")
+            or os.getenv("TELEGRAM_BOT_USERNAME")
+            or os.getenv("TELEGRAM_USERNAME")
+        )
     if _BOT_USERNAME:
         return _BOT_USERNAME
 
