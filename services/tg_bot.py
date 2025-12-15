@@ -51,33 +51,6 @@ def get_bot_token() -> str:
     return token
 
 
-def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, retries: int = 3) -> dict:
-    """Викликає Telegram Bot API через httpx з повторними спробами."""
-
-    token = get_bot_token()
-    url = API_URL_TEMPLATE.format(token=token, method=method)
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, retries + 1):
-        try:
-            response = httpx.post(url, json=payload, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
-            if not data.get("ok"):
-                raise RuntimeError(data.get("description") or "Unknown Telegram error")
-            return data
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, exc)
-            time.sleep(1.5 * attempt)
-
-    raise RuntimeError(last_error or "Unknown Telegram API error")
-
-
-# Синонім для зворотної сумісності і уникнення NameError у поточних лонгрunning-процесах
-_telegram_api_request = telegram_api_request
-
-
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
 
@@ -88,7 +61,6 @@ def send_message_httpx(chat_id: int, text: str) -> bool:
         "disable_web_page_preview": True,
     }
     try:
-        telegram_api_request("sendMessage", payload)
         return True
     except Exception as exc:
         LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
@@ -107,7 +79,6 @@ def get_bot_username() -> str:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
 
     try:
-        data = telegram_api_request("getMe", {})
         username = data.get("result", {}).get("username")
         if not username:
             raise RuntimeError("Bot API не повернув username")
@@ -245,7 +216,6 @@ def get_application() -> Application:
             read_timeout=60.0,
             write_timeout=60.0,
             connection_pool_size=8,
-            proxy=os.getenv("TELEGRAM_PROXY"),
         )
 
         application = (
@@ -271,7 +241,6 @@ def run_bot() -> None:
     while True:
         try:
             application = get_application()
-            telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
             application.run_polling(
                 stop_signals=None,
                 bootstrap_retries=-1,
