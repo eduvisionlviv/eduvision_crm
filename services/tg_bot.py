@@ -1,4 +1,4 @@
-"""Telegram-bot: Cloudflare Mirror Mode (Auto-fix)."""
+"""Telegram-bot: Cloudflare Mirror Mode (With DNS Hardfix)."""
 from __future__ import annotations
 
 import logging
@@ -8,6 +8,28 @@ import time
 import socket
 from pathlib import Path
 from typing import Optional
+
+# --- 💉 DNS HARDFIX (Лікуємо сліпоту сервера) ---
+# Ми вручну кажемо Python, де знаходиться ваш Cloudflare Worker.
+# Це обходить помилку [Errno -5].
+
+# IP адреси Cloudflare (вони стандартні для всіх воркерів)
+CF_IP = "104.21.80.1" 
+
+_original_getaddrinfo = socket.getaddrinfo
+
+def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    # Якщо код намагається знайти ваш домен
+    if host and "workers.dev" in str(host):
+        # Ми підсоауємо йому реальну IP адресу Cloudflare
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (CF_IP, 443))]
+    
+    # Для всього іншого працюємо як завжди
+    return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+# Застосовуємо патч
+socket.getaddrinfo = patched_getaddrinfo
+# ------------------------------------------------
 
 import httpx
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
@@ -78,23 +100,14 @@ def get_bot_token() -> str:
     return "" 
 
 def get_api_base() -> str:
-    """
-    Розумне отримання адреси API.
-    Автоматично додає '/bot' до URL Cloudflare, якщо користувач забув.
-    """
     _load_env_from_file_once()
     custom_base = os.getenv("TELEGRAM_API_BASE")
-    
     if not custom_base:
         return "https://api.telegram.org/bot"
     
-    # Чистимо адресу
     base = custom_base.strip().rstrip("/")
-    
-    # Магічний фікс: якщо адреса не закінчується на /bot, додаємо це
     if not base.endswith("/bot"):
         base += "/bot"
-        
     return base
 
 def _link_callback_url() -> str:
@@ -131,8 +144,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = {"user_token": token, "chat_id": update.effective_chat.id, "phone": contact.phone_number}
     
     try:
-        # Тут також використовуємо проксі для безпеки, якщо воно налаштоване глобально,
-        # але бекенд у нас локальний, тому йдемо напряму.
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             data = resp.json()
@@ -169,7 +180,7 @@ def build_conversation_handler() -> ConversationHandler:
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
-        LOGGER.info(f"✅ БОТ ПІДКЛЮЧЕНО! (Через дзеркало): @{me.username}")
+        LOGGER.info(f"✅ БОТ ПІДКЛЮЧЕНО! (Mirror + DNS Fix): @{me.username}")
     except Exception as e:
         LOGGER.warning(f"⚠️ Post-init check failed: {e}")
 
@@ -182,7 +193,7 @@ def get_application() -> Application:
         if not token: raise RuntimeError("No Token")
 
         api_base = get_api_base()
-        LOGGER.info(f"🌍 API Base URL: {api_base}")
+        LOGGER.info(f"🌍 API Base URL: {api_base} (Hardcoded DNS active)")
 
         request = HTTPXRequest(
             connect_timeout=40.0,
@@ -210,14 +221,12 @@ def get_application() -> Application:
 
 def run_bot() -> None:
     LOGGER.info("🚀 Запуск бота...")
-    
     import urllib3
     urllib3.disable_warnings()
 
     while True:
         try:
             app = get_application()
-            
             app.run_polling(
                 stop_signals=[], 
                 close_loop=False, 
