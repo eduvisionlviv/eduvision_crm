@@ -48,6 +48,20 @@ _application: Optional[Application] = None
 _ENV_LOADED = False
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# ─────────────── PROXY HELPER ───────────────
+def get_system_proxy_url() -> Optional[str]:
+    """
+    Повертає адресу проксі. Спочатку шукає TELEGRAM_PROXY,
+    якщо немає — бере системний HTTP_PROXY.
+    """
+    return (
+        os.getenv("TELEGRAM_PROXY")
+        or os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+    )
+
 # ─────────────── ENV / TOKEN ───────────────
 def _load_env_once() -> None:
     global _ENV_LOADED
@@ -81,11 +95,19 @@ def telegram_api_request(
     token = get_bot_token()
     url = API_URL_TEMPLATE.format(token=token, method=method)
     
+    # Отримуємо проксі
+    proxy_url = get_system_proxy_url()
+    
+    if proxy_url:
+        LOGGER.info(f"🌐 Використовую проксі для {method}...")
+
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            # Використовуємо Client без явних проксі - він сам їх знайде в os.environ
-            with httpx.Client(timeout=timeout) as client:
+            # ВИПРАВЛЕННЯ: Використовуємо 'proxy' (однина) для httpx >= 0.28.0
+            # Це вирішує проблему "unexpected keyword argument 'proxies'"
+            # І вирішує проблему [Errno -5], бо ми передаємо його явно.
+            with httpx.Client(proxy=proxy_url, timeout=timeout) as client:
                 r = client.post(url, json=payload)
                 r.raise_for_status()
                 data = r.json()
@@ -128,6 +150,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "phone": update.message.contact.phone_number,
     }
     try:
+        # Тут також можна додати proxy=proxy_url, якщо раптом внутрішні запити почнуть падати,
+        # але зазвичай для локалхоста це не треба.
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
@@ -144,13 +168,19 @@ def get_application() -> Application:
         return _application
     token = get_bot_token()
     
-    # Створюємо налаштування запиту без явного проксі. 
-    # Бібліотека httpx "побачить" змінні оточення сама.
-    request = HTTPXRequest(
-        connect_timeout=60,
-        read_timeout=60,
-        write_timeout=60,
-    )
+    proxy_url = get_system_proxy_url()
+    
+    request_kwargs = {
+        "connect_timeout": 60,
+        "read_timeout": 60,
+        "write_timeout": 60,
+    }
+    
+    # Для python-telegram-bot параметр називається 'proxy_url'
+    if proxy_url:
+        request_kwargs["proxy_url"] = proxy_url
+
+    request = HTTPXRequest(**request_kwargs)
 
     app = (
         ApplicationBuilder()
