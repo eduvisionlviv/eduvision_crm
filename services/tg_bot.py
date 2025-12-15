@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import httpx
+# Ми прибрали прямий імпорт httpx, бо більше не робимо ручних запитів
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -35,8 +35,6 @@ if not LOGGER.handlers:
 
 # ─────────────── КОНСТАНТИ ───────────────
 START_REPLY = "Вітаю, я твій помічник від Helen Doron 👋"
-API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
-API_URL_TEMPLATE = f"{API_BASE}/bot{{token}}/{{method}}"
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 LINK_INSTRUCTION = (
@@ -70,43 +68,6 @@ def get_bot_token() -> str:
             return v.strip()
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
 
-# ─────────────── TELEGRAM API (httpx) ───────────────
-def telegram_api_request(
-    method: str,
-    payload: dict,
-    *,
-    timeout: float = 20.0,
-    retries: int = 3,
-) -> dict:
-    token = get_bot_token()
-    url = API_URL_TEMPLATE.format(token=token, method=method)
-    
-    # ДІАГНОСТИКА: Перевіряємо змінні оточення
-    proxy_vars = {k: v for k, v in os.environ.items() if 'proxy' in k.lower()}
-    if proxy_vars:
-        LOGGER.info(f"🔍 Знайдені змінні проксі: {proxy_vars}")
-    else:
-        LOGGER.info("🔍 Змінні проксі відсутні (сподіваємось на прозорий інтернет).")
-
-    last_error = None
-    for attempt in range(1, retries + 1):
-        try:
-            # Спроба БЕЗ явного проксі. httpx візьме налаштування з системи.
-            # Якщо Supabase працює, то і це має спрацювати.
-            with httpx.Client(timeout=timeout) as client:
-                r = client.post(url, json=payload)
-                r.raise_for_status()
-                data = r.json()
-                if not data.get("ok"):
-                    raise RuntimeError(data)
-                LOGGER.info("✅ Успішне з'єднання з Telegram!")
-                return data
-        except Exception as e:
-            last_error = e
-            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, e)
-            time.sleep(1.5 * attempt)
-    raise RuntimeError(last_error)
-
 # ─────────────── HANDLERS ───────────────
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
@@ -137,6 +98,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "phone": update.message.contact.phone_number,
     }
     try:
+        # Імпортуємо httpx тільки тут, коли це справді треба
+        import httpx 
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
@@ -153,7 +116,8 @@ def get_application() -> Application:
         return _application
     token = get_bot_token()
     
-    # Створюємо Request без аргументів проксі
+    # Ми не передаємо жодних проксі. 
+    # Нехай бібліотека використовує системні налаштування за замовчуванням.
     request = HTTPXRequest(
         connect_timeout=60,
         read_timeout=60,
@@ -174,20 +138,18 @@ def get_application() -> Application:
 
 # ─────────────── RUN ───────────────
 def run_bot() -> None:
-    LOGGER.info(f"🚀 Запуск Telegram бота (httpx v{httpx.__version__})...")
+    LOGGER.info("🚀 Запуск Telegram бота (спрощений режим)...")
     
-    while True:
-        try:
-            telegram_api_request("getMe", {})
-            app = get_application()
-            app.run_polling(
-                stop_signals=None,
-                drop_pending_updates=True,
-                allowed_updates=ALLOWED_UPDATES,
-            )
-            break
-        except Exception as e:
-            LOGGER.error("❌ Telegram connection failed: %s", e)
-            global _application
-            _application = None
-            time.sleep(10)
+    # Ми прибрали блок try/catch з ручною перевіркою telegram_api_request.
+    # Одразу запускаємо long polling. Бібліотека сама впорається з помилками з'єднання.
+    try:
+        app = get_application()
+        app.run_polling(
+            stop_signals=None,
+            drop_pending_updates=True,
+            allowed_updates=ALLOWED_UPDATES,
+        )
+    except Exception as e:
+        LOGGER.error("❌ Telegram bot crashed: %s", e)
+        # Не перезапускаємо в циклі тут, щоб не спамити логами, якщо все погано.
+        # Gunicorn перезапустить worker, якщо треба.
