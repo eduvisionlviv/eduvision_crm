@@ -1,4 +1,4 @@
-"""Telegram-bot: Direct IP Mode."""
+"""Telegram-bot: Direct IP Mode + Global SSL Bypass."""
 from __future__ import annotations
 
 import logging
@@ -8,7 +8,20 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# --- 💉 GLOBAL HTTPX PATCH (The Fix) ---
+# Це вимикає перевірку SSL для ВСІХ запитів у цьому файлі.
+# Це дозволяє використовувати IP-адресу напряму без помилок сертифіката.
 import httpx
+
+class UnverifiedAsyncClient(httpx.AsyncClient):
+    def __init__(self, *args, **kwargs):
+        kwargs["verify"] = False  # <--- ВИМИКАЄМО SSL ПЕРЕВІРКУ
+        super().__init__(*args, **kwargs)
+
+# Замінюємо стандартний клієнт на наш "сліпий"
+httpx.AsyncClient = UnverifiedAsyncClient
+# ----------------------------------------
+
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -29,11 +42,12 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- НАЛАШТУВАННЯ "ТАНК" ---
-# Використовуємо альтернативний IP Telegram (DC Amsterdam/London), 
-# бо 149.154.167.220 часто висить.
-TELEGRAM_IP = "149.154.167.219"  # Або спробуйте .220, якщо цей не піде
+# --- НАЛАШТУВАННЯ IP ---
+# Спробуємо основну IP (.220). Якщо не піде — спробуйте .219
+TELEGRAM_IP = "149.154.167.220" 
 API_BASE_URL = f"https://{TELEGRAM_IP}/bot"
+
+LOGGER.info(f"🛠 FORCE IP MODE: {API_BASE_URL} (SSL Verify Disabled)")
 
 # --- КОНСТАНТИ ---
 START_REPLY = "Вітаю я твій помічник від Helen Doron"
@@ -54,7 +68,7 @@ _BOT_USERNAME: Optional[str] = None
 
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
-# --- РОБОТА З ENV ---
+# --- ENV HELPERS ---
 
 def _load_env_from_file_once() -> None:
     global _ENV_LOADED
@@ -92,7 +106,7 @@ def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
     return f"{base}{LINK_RECOVERY_PATH}"
 
-# --- ХЕНДЛЕРИ ---
+# --- HANDLERS ---
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message: return
@@ -122,7 +136,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = {"user_token": token, "chat_id": update.effective_chat.id, "phone": contact.phone_number}
     
     try:
-        # Тут також використовуємо verify=False, якщо ваш бекенд на тому ж сервері з проблемами SSL
+        # httpx вже пропатчений глобально вище, verify=False застосується автоматично
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             data = resp.json()
@@ -161,20 +175,9 @@ async def on_post_init(application: Application) -> None:
         me = await application.bot.get_me()
         LOGGER.info(f"✅ УСПІХ: Бот підключився до {TELEGRAM_IP}: @{me.username}")
     except Exception as e:
-        LOGGER.warning(f"⚠️ Post-init помилка: {e}")
+        LOGGER.warning(f"⚠️ Post-init помилка (може бути тимчасовою): {e}")
 
-# --- ЗАПУСК ---
-
-class CustomHTTPXRequest(HTTPXRequest):
-    """Кастомний клас запитів, що вимикає перевірку SSL для IP-адрес."""
-    def __init__(self, *args, **kwargs):
-        # Примусово додаємо параметр verify=False для httpx.AsyncClient
-        # Це необхідно, бо ми стукаємо на IP 149.154..., а сертифікат виданий на api.telegram.org
-        connection_pool_params = kwargs.get("connection_pool_params", {})
-        # Тут ми робимо "хак" - request бібліотека python-telegram-bot не дає прямого доступу до verify
-        # Але ми можемо спробувати передати це через proxy або переписати init, 
-        # проте найпростіше - це ігнорувати помилки на рівні системи (не рекомендовано, але тут необхідно)
-        super().__init__(*args, **kwargs)
+# --- SETUP ---
 
 def get_application() -> Application:
     global _application
@@ -182,17 +185,7 @@ def get_application() -> Application:
         token = get_bot_token()
         if not token: raise RuntimeError("No Token")
 
-        LOGGER.info(f"🛠 FORCE IP MODE: {API_BASE_URL}")
-
-        # Налаштовуємо Request. 
-        # Важливо: python-telegram-bot не дозволяє просто передати verify=False у конструктор HTTPXRequest.
-        # Але ми можемо обійти DNS, вказавши base_url в ApplicationBuilder.
-        
-        # Секретний інгредієнт: 
-        # Ми не можемо легко вимкнути SSL Verify через цей враппер без наслідування, 
-        # тому ми покладаємось на те, що якщо DNS не працює, то IP base_url - єдиний вихід.
-        # Якщо SSL впаде, нам доведеться патчити HTTPXRequest глибше.
-        
+        # Стандартні налаштування request, але "під капотом" працює наш UnverifiedAsyncClient
         request = HTTPXRequest(
             connect_timeout=30.0,
             read_timeout=30.0,
@@ -203,18 +196,13 @@ def get_application() -> Application:
         application = (
             ApplicationBuilder()
             .token(token)
-            .base_url(API_BASE_URL) # <--- ОСЬ ТУТ МАГІЯ: ЙДЕМО ПРЯМО НА IP
+            .base_url(API_BASE_URL)       # Йдемо на IP
             .base_file_url(f"https://{TELEGRAM_IP}/file/bot")
             .request(request)
             .get_updates_request(request)
             .post_init(on_post_init)
             .build()
         )
-        
-        # Хак для вимкнення SSL verify всередині вже створеного application, 
-        # бо інакше буде помилка "Hostname mismatch"
-        # Ми ліземо в нутрощі httpx client
-        application.bot._request._client.verify = False 
 
         application.add_handler(CommandHandler("start", handle_start))
         application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
@@ -224,20 +212,16 @@ def get_application() -> Application:
     return _application
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск бота в режимі Direct IP (без DNS)...")
+    LOGGER.info("🚀 Запуск бота в режимі Direct IP (Global Patch)...")
+    
+    # Вимикаємо набридливі попередження про SSL в консолі
+    import urllib3
+    urllib3.disable_warnings()
+
     while True:
         try:
             app = get_application()
-            # Потрібно також вимкнути verify для updater-а, який створює свій клієнт
-            # Це складно зробити до start_polling, тому ми сподіваємось на request, який ми передали.
-            # На жаль, ApplicationBuilder створює окремий request для get_updates.
             
-            # Тому ми робимо ще один брудний хак перед запуском:
-            import httpx 
-            # Глобально вимикаємо попередження про небезпечний SSL
-            import urllib3
-            urllib3.disable_warnings()
-
             app.run_polling(
                 stop_signals=[], 
                 close_loop=False, 
@@ -247,8 +231,7 @@ def run_bot() -> None:
             break
         except Exception as exc:
             LOGGER.error(f"❌ Bot Crash: {exc}")
-            # Якщо SSL помилка - спробуємо інший IP в наступній ітерації?
-            # Поки просто чекаємо
+            # Чекаємо перед рестартом
             global _application
             _application = None
             time.sleep(10)
