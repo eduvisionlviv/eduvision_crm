@@ -28,6 +28,9 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+import socket
+LOGGER.info("DNS api.telegram.org => %s", socket.getaddrinfo("api.telegram.org", 443))
+
 START_REPLY = "Вітаю я твій помічник від Helen Doron"
 # Дозволяємо замінити endpoint через TELEGRAM_API_BASE (наприклад, якщо DNS блокує api.telegram.org)
 API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
