@@ -48,12 +48,14 @@ _application: Optional[Application] = None
 _ENV_LOADED = False
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ─────────────── PROXY HELPER ───────────────
-def get_system_proxy_url() -> Optional[str]:
+# ─────────────── PROXY HELPER (HARDCODED FALLBACK) ───────────────
+def get_system_proxy_url() -> str:
     """
-    Повертає адресу проксі. Спочатку шукає TELEGRAM_PROXY,
-    якщо немає — бере системний HTTP_PROXY.
+    Повертає адресу проксі. 
+    1. Шукає в оточенні.
+    2. Якщо немає — використовує стандарт Hugging Face (127.0.0.1:3128).
     """
+    # 1. Спроба знайти в оточенні
     proxy = (
         os.getenv("TELEGRAM_PROXY")
         or os.getenv("HTTP_PROXY")
@@ -61,12 +63,16 @@ def get_system_proxy_url() -> Optional[str]:
         or os.getenv("HTTPS_PROXY")
         or os.getenv("https_proxy")
     )
+    
     if proxy:
-        # Для діагностики
         LOGGER.info(f"✅ Знайдено проксі в оточенні: {proxy}")
-    else:
-        LOGGER.warning("⚠️ Проксі в оточенні НЕ знайдено (можливо, змінні видалені в main.py?)")
-    return proxy
+        return proxy
+
+    # 2. План Б: Стандартний проксі Hugging Face Spaces
+    # Це працює завжди, навіть якщо змінні оточення стерті
+    fallback = "http://127.0.0.1:3128"
+    LOGGER.warning(f"⚠️ Проксі в оточенні немає! Використовую жорсткий fallback: {fallback}")
+    return fallback
 
 # ─────────────── ENV / TOKEN ───────────────
 def _load_env_once() -> None:
@@ -101,14 +107,13 @@ def telegram_api_request(
     token = get_bot_token()
     url = API_URL_TEMPLATE.format(token=token, method=method)
     
+    # Отримуємо проксі (автоматично або fallback)
     proxy_url = get_system_proxy_url()
     
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            # Використовуємо 'proxy' (однина) для httpx >= 0.28.0
-            # Це вирішує проблему "unexpected keyword argument 'proxies'"
-            # І вирішує проблему [Errno -5], бо ми передаємо його явно.
+            # Використовуємо 'proxy' (однина) - це критично для httpx v0.28+
             with httpx.Client(proxy=proxy_url, timeout=timeout) as client:
                 r = client.post(url, json=payload)
                 r.raise_for_status()
@@ -152,6 +157,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "phone": update.message.contact.phone_number,
     }
     try:
+        # Внутрішні запити на бекенд зазвичай не потребують проксі
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
@@ -176,7 +182,6 @@ def get_application() -> Application:
         "write_timeout": 60,
     }
     
-    # Для python-telegram-bot (v20+) параметр називається 'proxy_url'
     if proxy_url:
         request_kwargs["proxy_url"] = proxy_url
 
