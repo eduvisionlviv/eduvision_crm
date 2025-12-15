@@ -1,4 +1,4 @@
-"""Telegram-bot: Correct Business Logic (Token/Phone) + Cloudflare Fix."""
+"""Telegram-bot: Syntax Fix + Correct Logic."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,7 @@ import sys
 import socket
 from typing import Optional
 
-# --- 💉 DNS HARDFIX (Для Cloudflare) ---
+# --- 💉 DNS HARDFIX ---
 CF_IP = "104.21.80.1" 
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -45,11 +45,10 @@ if not LOGGER.handlers:
 
 START_REPLY = (
     "Вітаю! Я твій помічник від Helen Doron. 👋\n\n"
-    "Щоб я міг тебе ідентифікувати, мені потрібен твій номер телефону.\n"
+    "Щоб я міг надати тобі доступ, мені потрібно звірити твій номер телефону.\n"
     "👇 Натисни кнопку нижче:"
 )
 
-# Порт 7860 - стандарт для Hugging Face Spaces
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:7860")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 
@@ -70,8 +69,11 @@ def get_bot_token() -> str:
     if not token:
         for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
             if file_path and os.path.exists(file_path):
-                try: with open(file_path, 'r') as f: return f.read().strip()
-                except: pass
+                try:
+                    with open(file_path, 'r') as f:
+                        return f.read().strip()
+                except Exception:
+                    pass
         LOGGER.error("❌ TELEGRAM_BOT_TOKEN not found!")
         return ""
     return token
@@ -93,16 +95,13 @@ def _link_callback_url() -> str:
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message: return
 
-    # Логіка Deep Linking: шукаємо токен у посиланні
     args = context.args
     raw = args[0] if args else None
     token = raw.replace("-", ".") if raw else None
 
     if token:
         context.user_data["link_token"] = token
-        LOGGER.info(f"🔑 Знайдено токен входу: {token}")
-    else:
-        LOGGER.info("ℹ️ Вхід без токена (звичайна команда /start)")
+        LOGGER.info(f"🔑 Token found: {token}")
 
     markup = ReplyKeyboardMarkup(
         [[KeyboardButton("Поділитися телефоном ☎️", request_contact=True)]],
@@ -118,75 +117,55 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     token = context.user_data.get("link_token")
     contact = update.message.contact
     
-    # Перевірка свій/чужий
     if contact.user_id and update.effective_user and contact.user_id != update.effective_user.id:
         await update.message.reply_text(
-            "⚠️ Це не ваш номер. Натисніть кнопку внизу, щоб надіслати ВЛАСНИЙ номер.",
+            "⚠️ Це не ваш номер. Надішліть свій.",
             reply_markup=ReplyKeyboardRemove()
         )
         return
 
-    # --- ФОРМУВАННЯ ЗАПИТУ ---
-    # Ми відправляємо user_token ТІЛЬКИ якщо він є.
-    # Якщо його немає, ми не шлемо None, ми просто не додаємо це поле (або шлемо phone).
-    # Бекенд сам вирішить: пускати тільки по телефону чи видати помилку.
-    
+    # Payload Adjustment: No extra keys if token missing
     payload = {
-        "chat_id": str(update.effective_chat.id), # Int або Str, краще Str для надійності
+        "chat_id": update.effective_chat.id,
         "phone": contact.phone_number
     }
     
     if token:
         payload["user_token"] = token
-        LOGGER.info("📤 Відправка на сервер (з токеном)...")
-    else:
-        # Якщо токена немає, ми все одно пробуємо (може в CRM дозволено шукати по телефону)
-        LOGGER.info("📤 Відправка на сервер (ТІЛЬКИ ТЕЛЕФОН)...")
+
+    LOGGER.info(f"📤 Sending to backend: {payload}")
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             
-            # Обробка відповідей сервера
-            if resp.status_code == 200:
-                data = resp.json()
-                bot_text = data.get("bot_text") or data.get("message") or "Дякую! Ви успішно підключені."
-                await update.message.reply_text(f"✅ {bot_text}", reply_markup=ReplyKeyboardRemove())
-                
-                if data.get("status") == "ok":
-                    context.user_data.pop("link_token", None)
-            
-            elif resp.status_code == 400:
-                # Це ваша ситуація: "Недостатньо даних" або "Validation Error"
-                # Це означає, що CRM вимагає токен, а ми його не дали.
-                LOGGER.warning(f"CRM відхилила запит (400): {resp.text}")
-                await update.message.reply_text(
-                    "❌ Не вдалося знайти ваш профіль.\n\n"
-                    "Схоже, що ви не використали спеціальне посилання з особистого кабінету.\n"
-                    "Будь ласка, зайдіть у CRM, натисніть 'Підключити Telegram' і перейдіть за отриманим посиланням.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-            
-            elif resp.status_code == 404:
-                LOGGER.warning("Користувача не знайдено (404)")
-                await update.message.reply_text(
-                    "❌ Користувача з таким номером телефону не знайдено в базі.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-            
-            else:
-                LOGGER.error(f"Помилка сервера {resp.status_code}")
-                await update.message.reply_text("⚠️ Технічна помилка на сервері. Спробуйте пізніше.", reply_markup=ReplyKeyboardRemove())
+            if resp.status_code != 200:
+                LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
+                try:
+                    err_data = resp.json()
+                    err_msg = err_data.get('bot_text') or err_data.get('message') or "Помилка."
+                    await update.message.reply_text(f"⚠️ {err_msg}", reply_markup=ReplyKeyboardRemove())
+                except:
+                    await update.message.reply_text(f"⚠️ Помилка сервера ({resp.status_code}).", reply_markup=ReplyKeyboardRemove())
+                return
 
+            data = resp.json()
+        
+        bot_text = data.get("bot_text") or data.get("message") or "Дякую! Успіх."
+        await update.message.reply_text(bot_text, reply_markup=ReplyKeyboardRemove())
+
+        if data.get("status") == "ok":
+            context.user_data.pop("link_token", None)
+            
     except Exception as exc:
-        LOGGER.error(f"Помилка з'єднання: {exc}")
-        await update.message.reply_text("⚠️ Немає зв'язку з CRM системою.", reply_markup=ReplyKeyboardRemove())
+        LOGGER.error(f"Connection Failed: {exc}")
+        await update.message.reply_text("⚠️ Помилка з'єднання.", reply_markup=ReplyKeyboardRemove())
 
 
-# --- ДІАЛОГИ ---
+# --- OTHER ---
 
 async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message: await update.message.reply_text("Діалог розпочато.")
+    if update.message: await update.message.reply_text("Діалог.")
     return TYPING_REPLY
 
 async def conversation_store_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -216,8 +195,6 @@ async def on_post_init(application: Application) -> None:
         await application.bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         LOGGER.warning(f"⚠️ Init warning: {e}")
-
-# --- ЗАПУСК ---
 
 def get_application() -> Application:
     global _application
