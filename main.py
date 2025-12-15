@@ -27,24 +27,20 @@ _browser = None
 _pw = None
 _browser_last_used = 0.0
 
-# Налаштування тайм-аутів
-_BROWSER_IDLE_TIMEOUT = int(os.getenv("PDF_BROWSER_IDLE", "60"))   # сек
-_MONITOR_INTERVAL = int(os.getenv("PDF_MONITOR_INTERVAL", "30"))   # сек
+_BROWSER_IDLE_TIMEOUT = int(os.getenv("PDF_BROWSER_IDLE", "60"))
+_MONITOR_INTERVAL = int(os.getenv("PDF_MONITOR_INTERVAL", "30"))
 
 async def _launch_browser():
-    """Запускає Chromium, якщо він ще не запущений."""
     global _browser, _pw, _browser_last_used
     if _browser is None:
         if _pw is None:
             _pw = await async_playwright().start()
-        # Запускаємо без зайвих перевірок шляху, Playwright сам знайде його через ENV змінні
         _browser = await _pw.chromium.launch(args=["--no-sandbox"])
         print("🚀 Chromium launched")
     _browser_last_used = time.time()
     return _browser
 
 async def _close_browser_if_idle():
-    """Закриває Chromium, якщо він простоює."""
     global _browser, _pw
     if _browser is None:
         return
@@ -64,7 +60,6 @@ async def _close_browser_if_idle():
         print("💤 Chromium closed after idle timeout")
 
 def _monitor_loop():
-    """Фоновий монітор простою."""
     while True:
         try:
             asyncio.run(_close_browser_if_idle())
@@ -77,7 +72,6 @@ def start_browser_monitor():
     print("🛎️ Browser idle monitor started")
 
 async def warmup_browser():
-    """Попередній запуск браузера."""
     try:
         await _launch_browser()
         print("🔥 Browser warm-up complete")
@@ -89,7 +83,6 @@ app = Flask(__name__, static_folder="web", static_url_path="")
 allowed = os.getenv("crm_url", "http://localhost:5000")
 CORS(app, resources={r"/api/*": {"origins": [d.strip() for d in allowed.split(",")]}})
 
-# ─────────────── Динамічне завантаження API
 def load_api(app: Flask, folder: str = "api"):
     base = pathlib.Path(folder).resolve()
     for py in base.rglob("*.py"):
@@ -110,7 +103,6 @@ def load_api(app: Flask, folder: str = "api"):
                     blueprints.extend(extra_bps)
                 else:
                     blueprints.append(extra_bps)
-
             register_blueprints(app, blueprints, str(py.relative_to(base)), logger=log)
         except Exception as exc:
             log.error("⚠️  Skip %s : %s", py.relative_to(base), exc)
@@ -118,12 +110,8 @@ def load_api(app: Flask, folder: str = "api"):
 load_module_apis(app)
 load_api(app)
 with_global_lock(app)
-
-# --- ТИМЧАСОВО ВИМКНЕНО: Планувальник завдань ---
-# taskscheduler.start_scheduler_once()
 log.info("⏸️  Планувальник завдань (Scheduler) тимчасово вимкнено.")
 
-# Спроба завантажити test_mail_tool (якщо файл існує)
 try:
     from services.test_mail_tool import bp as bp_test_mail
     app.register_blueprint(bp_test_mail)
@@ -140,10 +128,9 @@ def start_telegram_bot_if_configured():
     with _telegram_lock:
         if _telegram_thread and _telegram_thread.is_alive():
             return
-
         try:
             tg_bot.get_bot_token()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if not _telegram_disabled_logged:
                 log.info("TELEGRAM_BOT_TOKEN не задано (%s). Бот вимкнено.", exc)
                 _telegram_disabled_logged = True
@@ -168,11 +155,9 @@ def ensure_telegram_bot_started() -> None:
 app.before_request(ensure_telegram_bot_started)
 start_telegram_bot_if_configured()
 
-# ─────────────── Bootstrap login user (plaintext → auto-hash on first login)
 if BOOTSTRAP_ENABLED:
     ensure_bootstrap_user()
 
-# ─────────────── Routes
 @app.route("/")
 def root():
     return app.send_static_file("index.html")
@@ -200,23 +185,16 @@ def static_or_fallback(path: str):
 def ping():
     return jsonify(status="ok")
 
-# ─────────────── Локальний запуск
 if __name__ == "__main__":
     start_browser_monitor()
     start_telegram_bot_if_configured()
-
-    # Прогрів браузера (без інсталяції, бо вже є)
     threading.Thread(target=lambda: asyncio.run(warmup_browser()), daemon=True).start()
-
-    # Hugging Face вимагає порт 7860
     port = int(os.getenv("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# ─────────────── Перерахунок цін (Опціонально) ───────────────
 try:
     from api.coreapiserver import get_client_for_table
     from api.currency_update import _reprice_sklad_by_rate
-    
     base = get_client_for_table("uni_base")
     try:
         row = base.table("uni_base").select("jsonb").eq("id", 2).execute().data
@@ -226,14 +204,12 @@ try:
                 rate = float(raw.get("usd_sale") or raw.get("usd") or raw.get("rate") or raw.get("sale") or 0)
             else:
                 rate = float(raw)
-            
             if rate > 0:
                 _reprice_sklad_by_rate(rate)
                 print(f"💱 Ціни перераховано по курсу: {rate}")
     except Exception as e:
         print(f"💱 Помилка отримання курсу з БД: {e}")
-
 except ImportError:
-    print("💱 Модуль 'api.currency_update' не знайдено. Перерахунок цін пропущено.")
+    pass
 except Exception as e:
     print(f"💱 Reprice failed: {e}")
