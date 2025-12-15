@@ -1,10 +1,14 @@
-"""Telegram-bot: Syntax Fix + Correct Logic (Final Version)."""
+"""Telegram-бот: обробка контактів та стартових токенів.
+
+Докладний покроковий опис — у docs/telegram_bot_flow.md.
+"""
 from __future__ import annotations
 
 import logging
 import os
 import sys
 import socket
+import time
 from typing import Optional
 
 # --- 💉 DNS HARDFIX ---
@@ -79,6 +83,10 @@ def get_bot_token() -> str:
         return ""
     return token
 
+
+def _get_crm_url() -> str:
+    return (os.getenv("crm_url") or os.getenv("CRM_URL") or BACKEND_URL).rstrip("/")
+
 def get_api_base() -> str:
     custom_base = os.getenv("TELEGRAM_API_BASE")
     if not custom_base: return "https://api.telegram.org/bot"
@@ -139,33 +147,24 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(_link_callback_url(), json=payload)
-            
-            # --- ЛОГІКА ОБРОБКИ ПОМИЛКИ БЕКЕНДУ (400) ---
-            if resp.status_code == 400:
-                LOGGER.warning(f"CRM відхилила запит (400): {resp.text}")
-                # Ось тут ми кажемо користувачу, що треба йти на сайт
-                await update.message.reply_text(
-                    "❌ Не вдалося знайти ваш профіль.\n\n"
-                    "Схоже, що ви зайшли без спеціального коду. Будь ласка, перейдіть в особистий кабінет на сайті і використайте посилання для підключення Telegram.",
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                return
-            
-            # Обробка інших помилок
-            elif resp.status_code != 200:
-                LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
-                await update.message.reply_text("⚠️ Технічна помилка на сервері. Спробуйте пізніше.", reply_markup=ReplyKeyboardRemove())
-                return
-            
-            # Успішний 200 OK
+
+        try:
             data = resp.json()
-        
+        except Exception:
+            data = {}
+
+        if resp.status_code != 200:
+            msg = data.get("bot_text") or "⚠️ Технічна помилка на сервері. Спробуйте пізніше."
+            LOGGER.warning(f"CRM response {resp.status_code}: {resp.text}")
+            await update.message.reply_text(msg, reply_markup=ReplyKeyboardRemove())
+            return
+
         bot_text = data.get("bot_text") or data.get("message") or "Дякую! Успіх."
         await update.message.reply_text(bot_text, reply_markup=ReplyKeyboardRemove())
 
         if data.get("status") == "ok":
             context.user_data.pop("link_token", None)
-            
+
     except Exception as exc:
         LOGGER.error(f"Connection Failed: {exc}")
         await update.message.reply_text("⚠️ Помилка з'єднання.", reply_markup=ReplyKeyboardRemove())
@@ -241,6 +240,76 @@ def get_telebot() -> TeleBot:
     global _telebot
     if _telebot is None: _telebot = TeleBot(get_bot_token(), parse_mode="HTML")
     return _telebot
+
+
+def get_bot_username() -> str:
+    global _BOT_USERNAME
+    if _BOT_USERNAME:
+        return _BOT_USERNAME
+
+    token = get_bot_token()
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN not configured")
+
+    url = f"{get_api_base()}{token}/getMe"
+    try:
+        resp = httpx.get(url, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        username = data.get("result", {}).get("username")
+        if not username:
+            raise RuntimeError("username missing in getMe response")
+        _BOT_USERNAME = username
+        return username
+    except Exception as exc:
+        LOGGER.error("get_bot_username failed: %s", exc)
+        raise
+
+
+def send_message_httpx(chat_id: str, text: str) -> None:
+    token = get_bot_token()
+    if not token:
+        LOGGER.error("send_message_httpx skipped: TELEGRAM_BOT_TOKEN not configured")
+        return
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    url = f"{get_api_base()}{token}/sendMessage"
+    try:
+        resp = httpx.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+    except Exception as exc:
+        LOGGER.error("send_message_httpx failed: %s", exc)
+
+
+def get_bot_status() -> dict:
+    token = get_bot_token()
+    status = {
+        "token_present": bool(token),
+        "username": _BOT_USERNAME,
+    }
+
+    if not token:
+        status["status"] = "disabled"
+        return status
+
+    try:
+        username = get_bot_username()
+        status.update({
+            "status": "ok",
+            "username": username,
+            "api_base": get_api_base(),
+        })
+    except Exception as exc:
+        status["status"] = "error"
+        status["error"] = str(exc)
+
+    return status
 
 def run_bot() -> None:
     LOGGER.info("🚀 Запуск...")

@@ -36,6 +36,7 @@ PUBLIC_APP_URL        = os.getenv("PUBLIC_APP_URL") or os.getenv("APP_BASE_URL")
 RECOVERY_CHAT_FIELD   = "recovery_tg_id"
 RESET_CODE_FIELD      = "recovery_code"
 RESET_TIME_FIELD      = "password_resets_time"
+CRM_URL               = (os.getenv("crm_url") or os.getenv("CRM_URL") or PUBLIC_APP_URL or "https://eduvision.space").rstrip("/")
 
 LOGIN_TABLES = ("contacts", "parents", "student")
 ROLE_BY_TABLE = {
@@ -251,6 +252,41 @@ def _normalize_phone(phone: Optional[str]) -> Optional[str]:
         return None
 
     return "+380" + core
+
+
+def _find_user_by_phone(phone: str) -> Optional[Tuple[str, dict]]:
+    """Find user across login tables by phone core substring."""
+
+    normalized = _normalize_phone(phone)
+    if not normalized:
+        return None
+
+    core = re.sub(r"\D", "", normalized)[-9:]
+    if not core:
+        return None
+
+    for table in LOGIN_TABLES:
+        client = get_client_for_table(table)
+        for field in ("user_phone", "phone"):
+            try:
+                rows = (
+                    client.table(table)
+                    .select("user_id,user_phone")
+                    .ilike(field, f"%{core}%")
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            except Exception as exc:
+                log.debug("phone lookup failed for %s.%s: %s", table, field, exc)
+                rows = []
+
+            if rows:
+                row = rows[0]
+                row["user_table"] = table
+                return table, row
+
+    return None
 
 
 def _get_link_serializer() -> URLSafeTimedSerializer:
@@ -802,6 +838,10 @@ def send_tg_link():
 
 # ─────────────────────────────────────────────────────────────
 # POST /api/tg/link_recovery — виклик із Telegram-бота
+#
+# Поведінка відповідає двом сценаріям (див. docs/telegram_bot_flow.md):
+# 1) коли користувач стартує бота за посиланням із сайту (надходить user_token);
+# 2) коли користувач знаходить бота в пошуку (токена немає, отже лише підказуємо подальші дії).
 # ─────────────────────────────────────────────────────────────
 @bp_tg.post("/link_recovery")
 def link_recovery():
@@ -810,8 +850,28 @@ def link_recovery():
     chat_id = data.get("chat_id")
     phone = data.get("phone") or ""
 
-    if not (token and chat_id and phone):
+    if not (chat_id and phone):
         return jsonify(error="validation_error", bot_text="Недостатньо даних."), 400
+
+    normalized_phone = _normalize_phone(phone)
+    if not normalized_phone:
+        return jsonify(error="invalid_phone", bot_text="Не вдалося розпізнати номер телефону."), 400
+
+    if not token:
+        found = _find_user_by_phone(normalized_phone)
+        if found:
+            bot_text = (
+                "🔎 Ми знайшли ваш номер у системі EduVision.\n\n"
+                f"Щоб підключити Telegram, увійдіть у свій кабінет на сайті {CRM_URL} "
+                "і скористайтесь кнопкою «Підключити Telegram»."
+            )
+            return jsonify(status="phone_found", bot_text=bot_text, crm_url=CRM_URL)
+
+        bot_text = (
+            "Ми не знайшли цей номер у базі EduVision.\n\n"
+            f"Перейдіть на {CRM_URL} та зареєструйтесь, після чого поверніться сюди і прив'яжіть Telegram."
+        )
+        return jsonify(status="phone_not_found", bot_text=bot_text, crm_url=CRM_URL)
 
     try:
         user_id = _unsign_user_token(token)
@@ -830,7 +890,7 @@ def link_recovery():
         return jsonify(error="not_found", bot_text="Акаунт не знайдено."), 404
 
     db_phone = _normalize_phone(row.get("user_phone"))
-    tg_phone = _normalize_phone(phone)
+    tg_phone = normalized_phone
 
     if not db_phone:
         return jsonify(status="missing_phone", bot_text=TG_NO_PHONE_TEXT)
