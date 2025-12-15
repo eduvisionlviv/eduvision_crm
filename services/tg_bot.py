@@ -217,7 +217,7 @@ def get_application() -> Application:
             read_timeout=60.0,
             write_timeout=60.0,
             connection_pool_size=8,
-            proxy_url=os.getenv("TELEGRAM_PROXY"),
+
         )
 
         application = (
