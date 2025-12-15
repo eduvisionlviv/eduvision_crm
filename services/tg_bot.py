@@ -1,4 +1,4 @@
-"""Telegram-bot: Direct IP Mode + Global SSL Bypass."""
+"""Telegram-bot with Proxy Support."""
 from __future__ import annotations
 
 import logging
@@ -8,20 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# --- 💉 GLOBAL HTTPX PATCH (The Fix) ---
-# Це вимикає перевірку SSL для ВСІХ запитів у цьому файлі.
-# Це дозволяє використовувати IP-адресу напряму без помилок сертифіката.
 import httpx
-
-class UnverifiedAsyncClient(httpx.AsyncClient):
-    def __init__(self, *args, **kwargs):
-        kwargs["verify"] = False  # <--- ВИМИКАЄМО SSL ПЕРЕВІРКУ
-        super().__init__(*args, **kwargs)
-
-# Замінюємо стандартний клієнт на наш "сліпий"
-httpx.AsyncClient = UnverifiedAsyncClient
-# ----------------------------------------
-
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -42,13 +29,6 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- НАЛАШТУВАННЯ IP ---
-# Спробуємо основну IP (.220). Якщо не піде — спробуйте .219
-TELEGRAM_IP = "149.154.167.220" 
-API_BASE_URL = f"https://{TELEGRAM_IP}/bot"
-
-LOGGER.info(f"🛠 FORCE IP MODE: {API_BASE_URL} (SSL Verify Disabled)")
-
 # --- КОНСТАНТИ ---
 START_REPLY = "Вітаю я твій помічник від Helen Doron"
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
@@ -68,7 +48,8 @@ _BOT_USERNAME: Optional[str] = None
 
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
-# --- ENV HELPERS ---
+
+# --- РОБОТА З ENV ---
 
 def _load_env_from_file_once() -> None:
     global _ENV_LOADED
@@ -96,17 +77,16 @@ def get_bot_token() -> str:
     LOGGER.error("❌ TELEGRAM_BOT_TOKEN не знайдено!")
     return "" 
 
-def get_bot_username() -> str:
-    global _BOT_USERNAME
+def get_proxy_url() -> Optional[str]:
+    """Отримує налаштування проксі."""
     _load_env_from_file_once()
-    if _BOT_USERNAME: return _BOT_USERNAME
-    return os.getenv("BOT_USERNAME") or "UnknownBot"
+    return os.getenv("TELEGRAM_PROXY_URL")
 
 def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
     return f"{base}{LINK_RECOVERY_PATH}"
 
-# --- HANDLERS ---
+# --- ХЕНДЛЕРИ ---
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message: return
@@ -136,7 +116,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = {"user_token": token, "chat_id": update.effective_chat.id, "phone": contact.phone_number}
     
     try:
-        # httpx вже пропатчений глобально вище, verify=False застосується автоматично
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             data = resp.json()
@@ -173,9 +152,9 @@ def build_conversation_handler() -> ConversationHandler:
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
-        LOGGER.info(f"✅ УСПІХ: Бот підключився до {TELEGRAM_IP}: @{me.username}")
+        LOGGER.info(f"✅ УСПІХ: Бот підключився через PROXY! @{me.username}")
     except Exception as e:
-        LOGGER.warning(f"⚠️ Post-init помилка (може бути тимчасовою): {e}")
+        LOGGER.warning(f"⚠️ Post-init помилка: {e}")
 
 # --- SETUP ---
 
@@ -183,21 +162,27 @@ def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
+        proxy = get_proxy_url()
+        
         if not token: raise RuntimeError("No Token")
 
-        # Стандартні налаштування request, але "під капотом" працює наш UnverifiedAsyncClient
+        if proxy:
+            LOGGER.info(f"🌍 Використовую проксі: {proxy}")
+        else:
+            LOGGER.warning("⚠️ Проксі не задано (TELEGRAM_PROXY_URL). Працюю напряму (можливі блокування).")
+
+        # Налаштування HTTPXRequest з підтримкою проксі
         request = HTTPXRequest(
-            connect_timeout=30.0,
-            read_timeout=30.0,
-            write_timeout=30.0,
+            connect_timeout=40.0,
+            read_timeout=40.0,
+            write_timeout=40.0,
             connection_pool_size=10,
+            proxy_url=proxy,  # <--- КЛЮЧОВИЙ МОМЕНТ
         )
 
         application = (
             ApplicationBuilder()
             .token(token)
-            .base_url(API_BASE_URL)       # Йдемо на IP
-            .base_file_url(f"https://{TELEGRAM_IP}/file/bot")
             .request(request)
             .get_updates_request(request)
             .post_init(on_post_init)
@@ -212,12 +197,8 @@ def get_application() -> Application:
     return _application
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск бота в режимі Direct IP (Global Patch)...")
+    LOGGER.info("🚀 Запуск бота...")
     
-    # Вимикаємо набридливі попередження про SSL в консолі
-    import urllib3
-    urllib3.disable_warnings()
-
     while True:
         try:
             app = get_application()
@@ -231,7 +212,6 @@ def run_bot() -> None:
             break
         except Exception as exc:
             LOGGER.error(f"❌ Bot Crash: {exc}")
-            # Чекаємо перед рестартом
             global _application
             _application = None
             time.sleep(10)
