@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import base64
+import os
 from functools import wraps
 from typing import Iterable, Optional
 
+from cryptography.fernet import Fernet, InvalidToken
 from flask import Blueprint, jsonify, request
 
 from api.coreapiserver import get_client_for_table
@@ -35,6 +38,7 @@ CRM_TABLES = {
     "enrollments": "crm_enrollments",
     "payments": "crm_payments",
     "bank_keys": "crm_bank_keys",
+    "bank_accounts": "crm_bank_accounts",
 }
 
 PAYMENT_TYPES = {"year", "month", "lesson"}
@@ -107,6 +111,36 @@ def _safe_mask(value: str) -> str:
     if len(value) <= 4:
         return "***"
     return f"{value[:2]}***{value[-2:]}"
+
+
+def _get_cipher() -> Fernet:
+    secret = os.getenv("BANK_ENCRYPTION_KEY") or ""
+    if not secret:
+        raise RuntimeError("BANK_ENCRYPTION_KEY is not configured")
+
+    # Дозволяємо як готовий base64, так і сирий ключ у hex/utf-8
+    try:
+        key_bytes = base64.urlsafe_b64decode(secret)
+    except Exception:  # noqa: BLE001
+        key_bytes = secret.encode()
+        key_bytes = base64.urlsafe_b64encode(key_bytes.ljust(32, b"0")[:32])
+
+    try:
+        return Fernet(key_bytes)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("BANK_ENCRYPTION_KEY is invalid for Fernet") from exc
+
+
+def _encrypt(value: str) -> str:
+    cipher = _get_cipher()
+    return cipher.encrypt(value.encode()).decode()
+
+
+def _make_mask(account_number: str) -> str:
+    if not account_number:
+        return ""
+    visible = account_number[-4:]
+    return f"***{visible}"
 
 
 # ──────────────────────────── Метадані ────────────────────────────
@@ -331,6 +365,76 @@ def store_bank_keys():
     }
     _table("bank_keys").insert(data).execute()
     return jsonify(ok=True, message="Ключі збережено"), 201
+
+
+# ──────────────────────────── Банківські рахунки (шифровані) ─────
+
+
+SUPPORTED_BANKS = {"privatbank", "monobank"}
+
+
+@bp.get("/bank/accounts")
+@require_role({"admin", "lc_manager"})
+def list_bank_accounts():
+    rows = _table("bank_accounts").select("*").execute().data or []
+    sanitized = []
+    for row in rows:
+        mask = row.get("account_mask") or _safe_mask(row.get("account_number_hint"))
+        sanitized.append(
+            {
+                "id": row.get("id"),
+                "user_id": row.get("user_id"),
+                "provider": row.get("provider"),
+                "provider_api": row.get("provider_api"),
+                "account_mask": mask,
+                "encryption": row.get("encryption_method", "fernet"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+    return jsonify(accounts=sanitized)
+
+
+@bp.post("/bank/accounts")
+@require_role({"admin", "lc_manager"})
+def store_bank_account():
+    payload = request.get_json(force=True, silent=True) or {}
+
+    provider = (payload.get("provider") or "").lower()
+    if provider not in SUPPORTED_BANKS:
+        return jsonify(error="unsupported_provider", allowed=sorted(SUPPORTED_BANKS)), 400
+
+    provider_api = payload.get("provider_api") or provider
+    user_id = payload.get("user_id")
+    account_number = payload.get("account_number") or ""
+    api_key = payload.get("api_key") or ""
+
+    if not user_id:
+        return jsonify(error="user_id_required"), 400
+    if not account_number or not api_key:
+        return jsonify(error="missing_credentials", message="Потрібні account_number та api_key"), 400
+
+    try:
+        account_mask = _make_mask(account_number)
+        encrypted_account = _encrypt(account_number)
+        encrypted_api_key = _encrypt(api_key)
+    except InvalidToken:
+        return jsonify(error="encryption_failed", message="Неправильний BANK_ENCRYPTION_KEY"), 500
+    except RuntimeError as exc:  # noqa: BLE001
+        return jsonify(error="config_error", message=str(exc)), 500
+
+    data = {
+        "user_id": user_id,
+        "provider": provider,
+        "provider_api": provider_api,
+        "account_mask": account_mask,
+        "account_number_encrypted": encrypted_account,
+        "api_key_encrypted": encrypted_api_key,
+        "encryption_method": "fernet",
+    }
+
+    _table("bank_accounts").insert(data).execute()
+    return jsonify(ok=True, message="Банківські реквізити збережено", account_mask=account_mask), 201
 
 
 __all__ = ["bp"]
