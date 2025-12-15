@@ -50,30 +50,6 @@ def get_bot_token() -> str:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
     return token
 
-
-def _telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, retries: int = 3) -> dict:
-    """Викликає Telegram Bot API через httpx з повторними спробами."""
-
-    token = get_bot_token()
-    url = API_URL_TEMPLATE.format(token=token, method=method)
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, retries + 1):
-        try:
-            response = httpx.post(url, json=payload, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
-            if not data.get("ok"):
-                raise RuntimeError(data.get("description") or "Unknown Telegram error")
-            return data
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, exc)
-            time.sleep(1.5 * attempt)
-
-    raise RuntimeError(last_error or "Unknown Telegram API error")
-
-
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
 
