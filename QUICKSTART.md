@@ -8,12 +8,13 @@
    - Go to your Supabase project
    - Click on "SQL Editor"
 
-2. **Run Migration Script**
+2. **Run Migration Scripts**
    ```sql
    -- Copy and paste the contents of:
-   db_migrations/01_create_crm_tables.sql
+   db_migrations/01_create_crm_tables.sql;
+   db_migrations/02_bank_accounts.sql;  -- додає шифроване сховище банківських реквізитів
    ```
-   
+
 3. **Click "Run"** to create all tables
 
 ✅ Your database is ready!
@@ -34,6 +35,7 @@ HDD2=your_stock_database_service_role_key
 # Authentication
 AUTH_TTL_HOURS=168          # 7 days session
 COOKIE_SECURE=1             # Use secure cookies
+BANK_ENCRYPTION_KEY=base64:your32bytefernetkey
 
 # Recovery Options
 USE_TG_RECOVERY=1           # Enable Telegram recovery
@@ -131,11 +133,7 @@ INFO:werkzeug: * Running on http://0.0.0.0:8080
 
 - **Telegram-бот не працює?**
   1. Перевірте налаштування: `curl http://localhost:8080/api/tg/status` поверне `configured: true` та `bot_username`, якщо токен коректний.
-  2. Додайте `TELEGRAM_BOT_TOKEN=<токен від BotFather>` до змінних середовища та перезапустіть бекенд. Без цього бот не стартує.
-  3. Якщо `/api/tg/status` показує `status: error`, токен може бути невірним або мережа блокує доступ до api.telegram.org.
-  4. Для прив'язки Telegram до акаунта надішліть собі лист через кнопку «Надіслати лист» у профілі, відкрийте бота за посиланням і поділіться номером телефону.
 
----
 
 ## 🎯 What to Try First
 

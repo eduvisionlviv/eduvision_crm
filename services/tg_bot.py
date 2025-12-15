@@ -4,22 +4,20 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import time  # <--- Додано для пауз
+import time
 from typing import Optional
 
 import httpx
-from telebot import TeleBot
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
-    JobQueue,
     MessageHandler,
     filters,
-    ApplicationBuilder
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -41,8 +39,8 @@ LINK_INSTRUCTION = (
 CHOOSING, TYPING_REPLY = range(2)
 
 _application: Optional[Application] = None
-_telebot: Optional[TeleBot] = None
 _BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME")
+ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 __all__ = ["run_bot", "get_application"]
 
@@ -51,20 +49,6 @@ def get_bot_token() -> str:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
     return token
-
-
-def _telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0) -> dict:
-    """Викликає Telegram Bot API через httpx і повертає декодовану відповідь."""
-
-    token = get_bot_token()
-    url = API_URL_TEMPLATE.format(token=token, method=method)
-    response = httpx.post(url, json=payload, timeout=timeout)
-    response.raise_for_status()
-    data = response.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("description") or "Unknown Telegram error")
-    return data
-
 
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
@@ -233,8 +217,9 @@ def get_application() -> Application:
             read_timeout=60.0,
             write_timeout=60.0,
             connection_pool_size=8,
+            proxy_url=os.getenv("TELEGRAM_PROXY"),
         )
-        
+
         application = (
             ApplicationBuilder()
             .token(token)
@@ -253,23 +238,24 @@ def get_application() -> Application:
 
 def run_bot() -> None:
     """Головна функція запуску з вічним циклом перезавантаження."""
-    application = get_application()
-    
     LOGGER.info("🚀 Запуск Telegram бота... Входимо в режим очікування з'єднання...")
 
     while True:
         try:
-            # Намагаємось запустити бота
+            application = get_application()
+            _telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
             application.run_polling(
-                stop_signals=None, 
-                bootstrap_retries=-1, # Просимо лібу пробувати
-                timeout=60
+                stop_signals=None,
+                bootstrap_retries=-1,
+                timeout=60,
+                drop_pending_updates=True,
+                allowed_updates=ALLOWED_UPDATES,
             )
-            # Якщо run_polling завершився без помилок (наприклад, ми його зупинили), виходимо
             break
-        except Exception as exc:
-            # Якщо сталася помилка (наприклад, DNS), ловимо її тут
-            LOGGER.error(f"❌ Збій з'єднання (DNS/Network): {exc}")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("❌ Збій з'єднання (DNS/Network): %s", exc)
             LOGGER.info("🔄 Перезапуск бота через 10 секунд...")
+            # Якщо з'єднання обірвалося — відбудуємо application, щоб перезапустити HTTPX сесії
+            global _application
+            _application = None
             time.sleep(10)
-            # І цикл починається знову -> application.run_polling()
