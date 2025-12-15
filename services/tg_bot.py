@@ -1,10 +1,11 @@
-"""Telegram-bot with Proxy Support."""
+"""Telegram-bot: Cloudflare Mirror Mode."""
 from __future__ import annotations
 
 import logging
 import os
 import sys
 import time
+import socket
 from pathlib import Path
 from typing import Optional
 
@@ -48,7 +49,6 @@ _BOT_USERNAME: Optional[str] = None
 
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
-
 # --- РОБОТА З ENV ---
 
 def _load_env_from_file_once() -> None:
@@ -77,10 +77,18 @@ def get_bot_token() -> str:
     LOGGER.error("❌ TELEGRAM_BOT_TOKEN не знайдено!")
     return "" 
 
-def get_proxy_url() -> Optional[str]:
-    """Отримує налаштування проксі."""
+def get_api_base() -> str:
+    """
+    Ось тут проект дізнається про вашу змінну TELEGRAM_API_BASE.
+    Якщо вона є - ми використовуємо її як адресу Telegram.
+    """
     _load_env_from_file_once()
-    return os.getenv("TELEGRAM_PROXY_URL")
+    custom_base = os.getenv("TELEGRAM_API_BASE")
+    if custom_base:
+        # Прибираємо зайвий слеш в кінці, якщо він є
+        return custom_base.rstrip("/")
+    # Якщо змінної немає - використовуємо стандартну (яка заблокована)
+    return "https://api.telegram.org/bot"
 
 def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
@@ -152,9 +160,9 @@ def build_conversation_handler() -> ConversationHandler:
 async def on_post_init(application: Application) -> None:
     try:
         me = await application.bot.get_me()
-        LOGGER.info(f"✅ УСПІХ: Бот підключився через PROXY! @{me.username}")
+        LOGGER.info(f"✅ УСПІХ: Бот підключено через дзеркало! @{me.username}")
     except Exception as e:
-        LOGGER.warning(f"⚠️ Post-init помилка: {e}")
+        LOGGER.warning(f"⚠️ Post-init check failed: {e}")
 
 # --- SETUP ---
 
@@ -162,27 +170,24 @@ def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
-        proxy = get_proxy_url()
-        
         if not token: raise RuntimeError("No Token")
 
-        if proxy:
-            LOGGER.info(f"🌍 Використовую проксі: {proxy}")
-        else:
-            LOGGER.warning("⚠️ Проксі не задано (TELEGRAM_PROXY_URL). Працюю напряму (можливі блокування).")
+        # 1. Отримуємо адресу з нашої нової змінної
+        api_base = get_api_base()
+        LOGGER.info(f"🌍 Використовую адресу API: {api_base}")
 
-        # Налаштування HTTPXRequest з підтримкою проксі
         request = HTTPXRequest(
             connect_timeout=40.0,
             read_timeout=40.0,
             write_timeout=40.0,
             connection_pool_size=10,
-            proxy_url=proxy,  # <--- КЛЮЧОВИЙ МОМЕНТ
         )
 
+        # 2. Передаємо цю адресу в ApplicationBuilder через .base_url()
         application = (
             ApplicationBuilder()
             .token(token)
+            .base_url(api_base)  # <--- Ключовий момент
             .request(request)
             .get_updates_request(request)
             .post_init(on_post_init)
@@ -197,8 +202,12 @@ def get_application() -> Application:
     return _application
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск бота...")
+    LOGGER.info("🚀 Запуск бота (Cloudflare Mirror Mode)...")
     
+    # Вимикаємо зайві попередження
+    import urllib3
+    urllib3.disable_warnings()
+
     while True:
         try:
             app = get_application()
