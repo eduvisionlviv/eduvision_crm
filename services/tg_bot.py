@@ -29,7 +29,9 @@ if not LOGGER.handlers:
     )
 
 START_REPLY = "Вітаю я твій помічник від Helen Doron"
-API_URL_TEMPLATE = "https://api.telegram.org/bot{token}/{method}"
+# Дозволяємо замінити endpoint через TELEGRAM_API_BASE (наприклад, якщо DNS блокує api.telegram.org)
+API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
+API_URL_TEMPLATE = f"{API_BASE}/bot{{token}}/{{method}}"
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 LINK_INSTRUCTION = (
@@ -181,6 +183,7 @@ def get_bot_username() -> str:
         return username
     except Exception as exc:
         raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
+
 
 def get_bot_status() -> dict:
     """Повертає зрозумілий статус налаштування Telegram-бота."""

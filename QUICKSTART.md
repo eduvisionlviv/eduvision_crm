@@ -150,7 +150,7 @@ INFO:werkzeug: * Running on http://0.0.0.0:8080
   1. Перевірте налаштування: `curl http://localhost:8080/api/tg/status` поверне `configured: true` та `bot_username`, якщо токен коректний.
   2. Додайте `TELEGRAM_BOT_TOKEN=<токен від BotFather>` (працюють також `BOT_TOKEN`, `TELEGRAM_TOKEN`, `TELEGRAM_API_TOKEN`); за потреби вкажіть `TELEGRAM_PROXY=<http(s)://user:pass@host:port>` у змінні середовища. Без токена бот не стартує.
   3. Для Kubernetes/Docker secret можна передати шлях до файлу з токеном через `TELEGRAM_BOT_TOKEN_FILE` (або `BOT_TOKEN_FILE`, `TELEGRAM_TOKEN_FILE`), а `.env` у корені проєкту завантажується автоматично при старті.
-  4. Якщо `/api/tg/status` показує `status: error`, токен може бути невірним або мережа блокує доступ до api.telegram.org. Бот сам перепідключається з паузою 10 секунд і чистить «завислі» апдейти.
+  4. Якщо `/api/tg/status` показує `status: error`, токен може бути невірним або мережа блокує доступ до api.telegram.org. Додайте `TELEGRAM_API_BASE=https://<ваш-endpoint>` (наприклад, локальний проксі з DNS-доступом) і, за потреби, `TELEGRAM_PROXY=...`, щоб обійти проблеми з резолвом чи TLS-інспекцією. Бот сам перепідключається з паузою 10 секунд і чистить «завислі» апдейти.
   5. Для прив'язки Telegram до акаунта надішліть собі лист через кнопку «Надіслати лист» у профілі, відкрийте бота за посиланням і поділіться номером телефону.
 
 ---
