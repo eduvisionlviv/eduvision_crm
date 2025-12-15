@@ -23,7 +23,6 @@ socket.getaddrinfo = patched_getaddrinfo
 # ------------------------------------------------
 
 import httpx
-# Додаємо підтримку telebot для сумісності з вашим старим кодом, якщо треба
 from telebot import TeleBot 
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
@@ -57,6 +56,9 @@ LINK_INSTRUCTION = (
 )
 
 CHOOSING, TYPING_REPLY = range(2)
+
+# Додано список дозволених оновлень (те, чого не вистачало)
+ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 _application: Optional[Application] = None
 _telebot: Optional[TeleBot] = None
@@ -289,7 +291,6 @@ def run_bot() -> None:
             app = get_application()
             
             # Запускаємо в режимі Polling
-            # stop_signals=[] важливий для запуску в окремому потоці (як у вас в main.py)
             app.run_polling(
                 stop_signals=[], 
                 close_loop=False, 
