@@ -35,30 +35,38 @@ if not LOGGER.handlers:
 
 # ─────────────── КОНСТАНТИ ───────────────
 START_REPLY = "Вітаю, я твій помічник від Helen Doron 👋"
-
 API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
 API_URL_TEMPLATE = f"{API_BASE}/bot{{token}}/{{method}}"
-
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
-
 LINK_INSTRUCTION = (
     "📱 Щоб підтвердити, що це саме ваш акаунт EduVision,\n"
     "будь ласка, поділіться своїм номером телефону, натиснувши кнопку нижче."
 )
-
 ALLOWED_UPDATES = ["message", "contact"]
-
 _application: Optional[Application] = None
 _ENV_LOADED = False
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# ─────────────── PROXY HELPER (РЯТУВАЛЬНИК) ───────────────
+def get_system_proxy_url() -> Optional[str]:
+    """
+    Повертає адресу проксі. Спочатку шукає TELEGRAM_PROXY,
+    якщо немає — бере системний HTTP_PROXY (який дає Hugging Face).
+    """
+    return (
+        os.getenv("TELEGRAM_PROXY")
+        or os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+    )
 
 # ─────────────── ENV / TOKEN ───────────────
 def _load_env_once() -> None:
     global _ENV_LOADED
     if _ENV_LOADED:
         return
-
     env_file = Path(os.getenv("ENV_FILE", _PROJECT_ROOT / ".env"))
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
@@ -66,7 +74,6 @@ def _load_env_once() -> None:
                 continue
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-
     _ENV_LOADED = True
 
 def get_bot_token() -> str:
@@ -85,18 +92,21 @@ def telegram_api_request(
     timeout: float = 20.0,
     retries: int = 3,
 ) -> dict:
-    """
-    Прямий запит до Telegram API.
-    Ми НЕ передаємо proxies вручну. httpx має взяти їх з os.environ (HTTP_PROXY).
-    """
     token = get_bot_token()
     url = API_URL_TEMPLATE.format(token=token, method=method)
     
+    # Налаштовуємо проксі для прямого запиту
+    proxy_url = get_system_proxy_url()
+    proxies_arg = None
+    if proxy_url:
+        proxies_arg = {"http://": proxy_url, "https://": proxy_url}
+        LOGGER.info(f"🌐 Використовую проксі для перевірки getMe...")
+
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            # Видалено proxies=... щоб уникнути помилки TypeError
-            r = httpx.post(url, json=payload, timeout=timeout)
+            # Явно передаємо proxies
+            r = httpx.post(url, json=payload, timeout=timeout, proxies=proxies_arg)
             r.raise_for_status()
             data = r.json()
             if not data.get("ok"):
@@ -104,24 +114,16 @@ def telegram_api_request(
             return data
         except Exception as e:
             last_error = e
-            LOGGER.warning(
-                "Telegram API attempt %s/%s failed: %s",
-                attempt,
-                retries,
-                e,
-            )
+            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, e)
             time.sleep(1.5 * attempt)
-
     raise RuntimeError(last_error)
 
 # ─────────────── HANDLERS ───────────────
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-
     raw = context.args[0] if context.args else None
     token = raw.replace("-", ".") if raw else None
-
     if token:
         context.user_data["link_token"] = token
         markup = ReplyKeyboardMarkup(
@@ -131,62 +133,50 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         await update.message.reply_text(LINK_INSTRUCTION, reply_markup=markup)
         return
-
     await update.message.reply_text(START_REPLY)
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.contact:
         return
-
     token = context.user_data.get("link_token")
     if not token:
-        await update.message.reply_text(
-            "Спершу відкрийте бота за спеціальним посиланням.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await update.message.reply_text("Спершу відкрийте бота за посиланням.", reply_markup=ReplyKeyboardRemove())
         return
-
     payload = {
         "user_token": token,
         "chat_id": update.effective_chat.id,
         "phone": update.message.contact.phone_number,
     }
-
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(
-                BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH,
-                json=payload,
-            )
+            r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
     except Exception as e:
         LOGGER.error("link_recovery error: %s", e)
-        await update.message.reply_text(
-            "⚠️ Помилка сервера.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await update.message.reply_text("⚠️ Помилка сервера.", reply_markup=ReplyKeyboardRemove())
         return
-
-    await update.message.reply_text(
-        data.get("bot_text", "Готово."),
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text(data.get("bot_text", "Готово."), reply_markup=ReplyKeyboardRemove())
 
 # ─────────────── APPLICATION ───────────────
 def get_application() -> Application:
     global _application
     if _application:
         return _application
-
     token = get_bot_token()
     
-    # Ми не передаємо proxy/proxy_url взагалі.
-    # Бібліотека має сама побачити змінні оточення.
-    request = HTTPXRequest(
-        connect_timeout=60,
-        read_timeout=60,
-        write_timeout=60,
-    )
+    # Отримуємо проксі
+    proxy_url = get_system_proxy_url()
+    
+    # Для python-telegram-bot використовуємо параметр 'proxy_url'
+    request_kwargs = {
+        "connect_timeout": 60,
+        "read_timeout": 60,
+        "write_timeout": 60,
+    }
+    if proxy_url:
+        request_kwargs["proxy_url"] = proxy_url  # Саме proxy_url, а не proxy
+
+    request = HTTPXRequest(**request_kwargs)
 
     app = (
         ApplicationBuilder()
@@ -195,17 +185,14 @@ def get_application() -> Application:
         .get_updates_request(request)
         .build()
     )
-
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-
     _application = app
     return app
 
 # ─────────────── RUN ───────────────
 def run_bot() -> None:
     LOGGER.info("🚀 Запуск Telegram бота...")
-
     while True:
         try:
             telegram_api_request("getMe", {})
