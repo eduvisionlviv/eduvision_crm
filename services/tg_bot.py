@@ -4,22 +4,21 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import time  # <--- Додано для пауз
+import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
-from telebot import TeleBot
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
-    JobQueue,
     MessageHandler,
     filters,
-    ApplicationBuilder
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -41,16 +40,171 @@ LINK_INSTRUCTION = (
 CHOOSING, TYPING_REPLY = range(2)
 
 _application: Optional[Application] = None
-_telebot: Optional[TeleBot] = None
-_BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME")
+_ENV_LOADED = False
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_BOT_USERNAME: Optional[str] = None
+ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 __all__ = ["run_bot", "get_application"]
 
 def get_bot_token() -> str:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is required")
-    return token
+    """Повертає токен бота з підтримкою кількох назв змінних."""
+
+    _load_env_from_file_once()
+
+    file_candidates = [
+        os.getenv("TELEGRAM_BOT_TOKEN_FILE"),
+        os.getenv("BOT_TOKEN_FILE"),
+        os.getenv("TELEGRAM_TOKEN_FILE"),
+    ]
+    for file_path in file_candidates:
+        if file_path:
+            try:
+                token = Path(file_path).read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+            except FileNotFoundError:
+                LOGGER.warning("Файл із токеном Telegram не знайдено: %s", file_path)
+
+    candidates = [
+        "TELEGRAM_BOT_TOKEN",
+        "BOT_TOKEN",
+        "TELEGRAM_TOKEN",
+        "TELEGRAM_API_TOKEN",
+        "TELEGRAM_BOT_API_TOKEN",
+    ]
+
+    for key in candidates:
+        value = os.getenv(key)
+        if value and value.strip():
+            return value.strip()
+
+    raise RuntimeError(
+        "TELEGRAM_BOT_TOKEN не задано. Вкажіть TELEGRAM_BOT_TOKEN (або BOT_TOKEN / TELEGRAM_TOKEN)."
+    )
+
+
+def _load_env_from_file_once() -> None:
+    """Ледачо підвантажує .env один раз, щоб зчитати токен/username."""
+
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+
+    env_path = os.getenv("ENV_FILE")
+    if env_path:
+        env_file = Path(env_path)
+    else:
+        env_file = _PROJECT_ROOT / ".env"
+
+    if env_file.is_file():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if not line or line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Не вдалося завантажити .env (%s): %s", env_file, exc)
+
+    _ENV_LOADED = True
+
+
+def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, retries: int = 3) -> dict:
+    """Викликає Telegram Bot API через httpx з повторними спробами."""
+
+    token = get_bot_token()
+    url = API_URL_TEMPLATE.format(token=token, method=method)
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            response = httpx.post(url, json=payload, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            if not data.get("ok"):
+                raise RuntimeError(data.get("description") or "Unknown Telegram error")
+            return data
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, exc)
+            time.sleep(1.5 * attempt)
+
+    raise RuntimeError(last_error or "Unknown Telegram API error")
+
+
+# Синонім для зворотної сумісності і уникнення NameError у поточних лонгрunning-процесах
+_telegram_api_request = telegram_api_request
+
+
+def send_message_httpx(chat_id: int, text: str) -> bool:
+    """Надсилає повідомлення через Bot API без запуску поллінгу."""
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        telegram_api_request("sendMessage", payload)
+        return True
+    except Exception as exc:
+        LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
+        return False
+
+
+def get_bot_username() -> str:
+    """Повертає username бота або піднімає виняток із поясненням."""
+
+    global _BOT_USERNAME
+    _load_env_from_file_once()
+    if not _BOT_USERNAME:
+        _BOT_USERNAME = (
+            os.getenv("BOT_USERNAME")
+            or os.getenv("TELEGRAM_BOT_USERNAME")
+            or os.getenv("TELEGRAM_USERNAME")
+        )
+    if _BOT_USERNAME:
+        return _BOT_USERNAME
+
+    token = get_bot_token()
+
+    try:
+        data = telegram_api_request("getMe", {})
+        username = data.get("result", {}).get("username")
+        if not username:
+            raise RuntimeError("Bot API не повернув username")
+        _BOT_USERNAME = username
+        return username
+    except Exception as exc:
+        raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
+
+
+def get_bot_status() -> dict:
+    """Повертає зрозумілий статус налаштування Telegram-бота."""
+
+    try:
+        token = get_bot_token()
+    except RuntimeError as exc:
+        return {
+            "configured": False,
+            "status": "missing_token",
+            "message": str(exc),
+        }
+
+    status: dict = {"configured": True}
+
+    try:
+        status["bot_username"] = get_bot_username()
+        status["status"] = "ok"
+    except Exception as exc:
+        status["status"] = "error"
+        status["message"] = str(exc)
+
+    return status
 
 def _link_callback_url() -> str:
     base = BACKEND_URL.rstrip("/")
@@ -161,8 +315,9 @@ def get_application() -> Application:
             read_timeout=60.0,
             write_timeout=60.0,
             connection_pool_size=8,
+            proxy=os.getenv("TELEGRAM_PROXY"),
         )
-        
+
         application = (
             ApplicationBuilder()
             .token(token)
@@ -181,23 +336,24 @@ def get_application() -> Application:
 
 def run_bot() -> None:
     """Головна функція запуску з вічним циклом перезавантаження."""
-    application = get_application()
-    
     LOGGER.info("🚀 Запуск Telegram бота... Входимо в режим очікування з'єднання...")
 
     while True:
         try:
-            # Намагаємось запустити бота
+            application = get_application()
+            telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
             application.run_polling(
-                stop_signals=None, 
-                bootstrap_retries=-1, # Просимо лібу пробувати
-                timeout=60
+                stop_signals=None,
+                bootstrap_retries=-1,
+                timeout=60,
+                drop_pending_updates=True,
+                allowed_updates=ALLOWED_UPDATES,
             )
-            # Якщо run_polling завершився без помилок (наприклад, ми його зупинили), виходимо
             break
-        except Exception as exc:
-            # Якщо сталася помилка (наприклад, DNS), ловимо її тут
-            LOGGER.error(f"❌ Збій з'єднання (DNS/Network): {exc}")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("❌ Збій з'єднання (DNS/Network): %s", exc)
             LOGGER.info("🔄 Перезапуск бота через 10 секунд...")
+            # Якщо з'єднання обірвалося — відбудуємо application, щоб перезапустити HTTPX сесії
+            global _application
+            _application = None
             time.sleep(10)
-            # І цикл починається знову -> application.run_polling()
