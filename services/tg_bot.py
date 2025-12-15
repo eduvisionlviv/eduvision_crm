@@ -48,30 +48,6 @@ _application: Optional[Application] = None
 _ENV_LOADED = False
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ─────────────── PROXY SETUP ───────────────
-def _setup_proxy_env():
-    """
-    Примусово дублює налаштування проксі в усі змінні оточення,
-    щоб httpx точно їх побачив.
-    """
-    system_proxy = (
-        os.getenv("TELEGRAM_PROXY")
-        or os.getenv("HTTP_PROXY")
-        or os.getenv("http_proxy")
-        or os.getenv("HTTPS_PROXY")
-        or os.getenv("https_proxy")
-    )
-    
-    if system_proxy:
-        # Дублюємо проксі для всіх варіантів написання
-        os.environ["HTTP_PROXY"] = system_proxy
-        os.environ["HTTPS_PROXY"] = system_proxy
-        os.environ["http_proxy"] = system_proxy
-        os.environ["https_proxy"] = system_proxy
-        LOGGER.info(f"✅ Proxy environment configured: {system_proxy}")
-        return system_proxy
-    return None
-
 # ─────────────── ENV / TOKEN ───────────────
 def _load_env_once() -> None:
     global _ENV_LOADED
@@ -108,9 +84,7 @@ def telegram_api_request(
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            # Створюємо клієнт БЕЗ аргументів проксі.
-            # trust_env=True (за замовчуванням) змусить його читати os.environ['HTTPS_PROXY'],
-            # який ми налаштували в _setup_proxy_env()
+            # Використовуємо Client без явних проксі - він сам їх знайде в os.environ
             with httpx.Client(timeout=timeout) as client:
                 r = client.post(url, json=payload)
                 r.raise_for_status()
@@ -170,8 +144,8 @@ def get_application() -> Application:
         return _application
     token = get_bot_token()
     
-    # Тут ми теж НЕ передаємо proxy_url, покладаючись на env vars
-    # Але якщо дуже треба - можна розкоментувати
+    # Створюємо налаштування запиту без явного проксі. 
+    # Бібліотека httpx "побачить" змінні оточення сама.
     request = HTTPXRequest(
         connect_timeout=60,
         read_timeout=60,
@@ -194,9 +168,6 @@ def get_application() -> Application:
 def run_bot() -> None:
     LOGGER.info(f"🚀 Запуск Telegram бота (httpx v{httpx.__version__})...")
     
-    # Налаштовуємо середовище перед запуском
-    _setup_proxy_env()
-
     while True:
         try:
             telegram_api_request("getMe", {})
