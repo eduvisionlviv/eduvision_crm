@@ -1,15 +1,13 @@
-"""Telegram-bot: Business Logic + Cloudflare Fix + 400 Error Fix."""
+"""Telegram-bot: Fix 400 Error (Payload Adjustment)."""
 from __future__ import annotations
 
 import logging
 import os
 import sys
-import time
 import socket
-from pathlib import Path
 from typing import Optional
 
-# --- 💉 DNS HARDFIX (Для роботи через Cloudflare) ---
+# --- 💉 DNS HARDFIX ---
 CF_IP = "104.21.80.1" 
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -19,10 +17,9 @@ def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     return _original_getaddrinfo(host, port, family, type, proto, flags)
 
 socket.getaddrinfo = patched_getaddrinfo
-# ------------------------------------------------
+# ----------------------
 
 import httpx
-# Додаємо підтримку telebot для сумісності
 from telebot import TeleBot 
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
@@ -38,7 +35,7 @@ from telegram.ext import (
     filters,
 )
 
-# --- ЛОГУВАННЯ ---
+# --- CONFIG ---
 LOGGER = logging.getLogger(__name__)
 if not LOGGER.handlers:
     logging.basicConfig(
@@ -46,15 +43,12 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- КОНСТАНТИ ---
 START_REPLY = (
-    "Привіт! Я твій помічник від Helen Doron. 👋\n\n"
-    "А хто ти? 🤔\n"
-    "Мені потрібно звірити твій номер телефону, щоб ідентифікувати тебе в системі.\n\n"
-    "👇 Натисни кнопку нижче, щоб поділитися номером:"
+    "Вітаю! Я твій помічник від Helen Doron. 👋\n\n"
+    "Щоб я міг надати тобі доступ, мені потрібно звірити твій номер телефону.\n"
+    "👇 Натисни кнопку нижче:"
 )
 
-# Вказуємо порт 7860, бо саме на ньому працює Gunicorn у Space
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:7860")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 
@@ -68,29 +62,24 @@ _BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME")
 __all__ = ["run_bot", "get_application", "get_bot_token"]
 
 
-# --- РОБОТА З ENV ---
+# --- HELPERS ---
 
 def get_bot_token() -> str:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
             if file_path and os.path.exists(file_path):
-                try:
-                    with open(file_path, 'r') as f: return f.read().strip()
+                try: with open(file_path, 'r') as f: return f.read().strip()
                 except: pass
-        LOGGER.error("❌ TELEGRAM_BOT_TOKEN не знайдено!")
+        LOGGER.error("❌ TELEGRAM_BOT_TOKEN not found!")
         return ""
     return token
 
 def get_api_base() -> str:
-    """Визначає адресу API (Cloudflare Mirror)."""
     custom_base = os.getenv("TELEGRAM_API_BASE")
-    if not custom_base:
-        return "https://api.telegram.org/bot"
-    
+    if not custom_base: return "https://api.telegram.org/bot"
     base = custom_base.strip().rstrip("/")
-    if not base.endswith("/bot"):
-        base += "/bot"
+    if not base.endswith("/bot"): base += "/bot"
     return base
 
 def _link_callback_url() -> str:
@@ -98,97 +87,84 @@ def _link_callback_url() -> str:
     return f"{base}{LINK_RECOVERY_PATH}"
 
 
-# --- ХЕНДЛЕРИ ---
+# --- HANDLERS ---
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Обробляє /start.
-    Завжди показує кнопку телефону.
-    """
     if not update.message: return
 
-    # Перевірка deep linking
     args = context.args
     raw = args[0] if args else None
     token = raw.replace("-", ".") if raw else None
 
     if token:
         context.user_data["link_token"] = token
-        LOGGER.info(f"🔑 Отримано токен: {token}")
+        LOGGER.info(f"🔑 Token found: {token}")
 
-    # Створюємо кнопку
     markup = ReplyKeyboardMarkup(
         [[KeyboardButton("Поділитися телефоном ☎️", request_contact=True)]],
         resize_keyboard=True, 
         one_time_keyboard=True
     )
-    
-    # Відправляємо текст + кнопку
     await update.message.reply_text(START_REPLY, reply_markup=markup)
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Передає контакт у бекенд."""
     if not update.message or not update.message.contact: return
 
     token = context.user_data.get("link_token")
     contact = update.message.contact
     
-    # Перевірка: чи це номер користувача?
     if contact.user_id and update.effective_user and contact.user_id != update.effective_user.id:
         await update.message.reply_text(
-            "⚠️ Це не ваш номер. Натисніть кнопку внизу, щоб надіслати ВЛАСНИЙ номер.",
+            "⚠️ Це не ваш номер. Надішліть свій.",
             reply_markup=ReplyKeyboardRemove()
         )
         return
 
-    # Формуємо дані. Якщо токена немає, передаємо порожній рядок "", щоб уникнути 400 Bad Request
+    # Payload Adjustment:
+    # 1. user_token is None if empty (JSON null)
+    # 2. chat_id converted to str (just in case backend expects str)
+    # 3. No extra fields
     payload = {
-        "user_token": token if token else "",
-        "chat_id": update.effective_chat.id,
-        "phone": contact.phone_number,
-        "first_name": contact.first_name or "",
-        "last_name": contact.last_name or ""
+        "user_token": token if token else None, 
+        "chat_id": str(update.effective_chat.id),
+        "phone": contact.phone_number
     }
 
-    LOGGER.info(f"📤 Відправка на бекенд: {contact.phone_number}")
+    LOGGER.info(f"📤 Sending to backend: {payload}")
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             
-            # Логуємо помилку, якщо статус не 200
             if resp.status_code != 200:
                 LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
-                
-            resp.raise_for_status()
+                # Try to parse error message
+                try:
+                    err_data = resp.json()
+                    err_msg = err_data.get('bot_text') or err_data.get('message') or "Помилка сервера."
+                    await update.message.reply_text(f"⚠️ {err_msg}", reply_markup=ReplyKeyboardRemove())
+                except:
+                    await update.message.reply_text(f"⚠️ Помилка сервера ({resp.status_code}).", reply_markup=ReplyKeyboardRemove())
+                return
+
             data = resp.json()
         
-        bot_text = data.get("bot_text") or data.get("message") or "Дякую! Дані отримано."
+        bot_text = data.get("bot_text") or data.get("message") or "Дякую! Успіх."
         await update.message.reply_text(bot_text, reply_markup=ReplyKeyboardRemove())
 
         if data.get("status") == "ok":
             context.user_data.pop("link_token", None)
             
-    except httpx.HTTPStatusError as exc:
-        LOGGER.error(f"HTTP Error: {exc}")
-        # Якщо бекенд повернув 400/500, кажемо користувачу щось зрозуміле
-        await update.message.reply_text(
-            "⚠️ Не вдалося знайти вас у базі. Зверніться до адміністратора.",
-            reply_markup=ReplyKeyboardRemove()
-        )
     except Exception as exc:
         LOGGER.error(f"Connection Failed: {exc}")
-        await update.message.reply_text(
-            "⚠️ Помилка з'єднання. Спробуйте пізніше.", 
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await update.message.reply_text("⚠️ Помилка з'єднання.", reply_markup=ReplyKeyboardRemove())
 
 
-# --- ДІАЛОГИ ---
+# --- OTHER ---
 
 async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message: await update.message.reply_text("Діалог розпочато.")
+    if update.message: await update.message.reply_text("Діалог.")
     return TYPING_REPLY
 
 async def conversation_store_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -219,15 +195,12 @@ async def on_post_init(application: Application) -> None:
     except Exception as e:
         LOGGER.warning(f"⚠️ Init warning: {e}")
 
-# --- SETUP ---
-
 def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
         api_base = get_api_base()
-        
-        LOGGER.info(f"🌍 API Base: {api_base}")
+        LOGGER.info(f"🌍 API: {api_base}")
 
         request = HTTPXRequest(
             connect_timeout=40.0,
@@ -260,7 +233,7 @@ def get_telebot() -> TeleBot:
     return _telebot
 
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск (Fix 400)...")
+    LOGGER.info("🚀 Запуск...")
     import urllib3
     urllib3.disable_warnings()
 
