@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Dict
 
 import httpx
 from telegram import (
@@ -81,6 +81,31 @@ def get_bot_token() -> str:
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
 
 
+def _get_proxy_config() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """
+    Повертає (proxies_dict, proxy_url) для налаштування httpx.
+    """
+    # Шукаємо проксі у змінних оточення (Hugging Face завжди їх там має)
+    proxy = (
+        os.getenv("HTTPS_PROXY") 
+        or os.getenv("https_proxy") 
+        or os.getenv("HTTP_PROXY") 
+        or os.getenv("http_proxy")
+    )
+    
+    if not proxy:
+        return None, None
+
+    # httpx.post очікує словник 'proxies'
+    proxies_dict = {
+        "http://": proxy,
+        "https://": proxy,
+    }
+    
+    # HTTPXRequest очікує рядок 'proxy_url'
+    return proxies_dict, proxy
+
+
 # ─────────────── TELEGRAM API (httpx) ───────────────
 def telegram_api_request(
     method: str,
@@ -90,19 +115,22 @@ def telegram_api_request(
     retries: int = 3,
 ) -> dict:
     """
-    Виконує прямий запит до Telegram API (використовується для getMe перед запуском).
+    Виконує прямий запит до Telegram API (для перевірки getMe).
     """
     token = get_bot_token()
     url = API_URL_TEMPLATE.format(token=token, method=method)
     
-    # ВАЖЛИВО: Ми прибрали параметр proxies=...
-    # httpx автоматично підхопить змінні оточення (HTTP_PROXY/HTTPS_PROXY),
-    # які надає Hugging Face.
-    
+    # Отримуємо налаштування проксі
+    proxies_dict, _ = _get_proxy_config()
+
+    if proxies_dict:
+        LOGGER.info(f"🌐 Використовую проксі для запиту {method}")
+
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            r = httpx.post(url, json=payload, timeout=timeout)
+            # Використовуємо аргумент 'proxies' (множина), це стандарт для httpx
+            r = httpx.post(url, json=payload, timeout=timeout, proxies=proxies_dict)
             r.raise_for_status()
             data = r.json()
             if not data.get("ok"):
@@ -161,7 +189,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     }
 
     try:
-        # Тут теж використовуємо авто-конфігурацію
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(
                 BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH,
@@ -190,13 +217,21 @@ def get_application() -> Application:
 
     token = get_bot_token()
     
-    # Ми не передаємо proxy_url явно, бо змінні оточення вже налаштовані
-    # python-telegram-bot використає їх автоматично через httpx.
-    request = HTTPXRequest(
-        connect_timeout=60,
-        read_timeout=60,
-        write_timeout=60,
-    )
+    # Отримуємо проксі для бота
+    _, proxy_url = _get_proxy_config()
+    
+    # Створюємо request з явним проксі
+    # Використовуємо proxy_url (це стандарт для python-telegram-bot v20+)
+    request_kwargs = {
+        "connect_timeout": 60,
+        "read_timeout": 60,
+        "write_timeout": 60,
+    }
+    
+    if proxy_url:
+        request_kwargs["proxy_url"] = proxy_url
+        
+    request = HTTPXRequest(**request_kwargs)
 
     app = (
         ApplicationBuilder()
