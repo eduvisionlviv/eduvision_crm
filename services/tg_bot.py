@@ -33,7 +33,7 @@ API_URL_TEMPLATE = "https://api.telegram.org/bot{token}/{method}"
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 LINK_INSTRUCTION = (
-    "📱 Щоб підтвердити, що це саме ваш акаунт EduVision,\n"
+    "📱 Щоб підтвердити, що це саме ваш акаунт EduVision,\n",
     "будь ласка, поділіться своїм номером телефону, натиснувши кнопку нижче."
 )
 
@@ -182,7 +182,6 @@ def get_bot_username() -> str:
     except Exception as exc:
         raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
 
-
 def get_bot_status() -> dict:
     """Повертає зрозумілий статус налаштування Telegram-бота."""
 
@@ -308,7 +307,7 @@ def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
-        
+
         # Максимально лояльні налаштування мережі
         request_settings = HTTPXRequest(
             connect_timeout=60.0,
