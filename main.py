@@ -10,6 +10,14 @@ from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 from playwright.async_api import async_playwright
 
+# ─────────────── ВИПРАВЛЕННЯ PROXY (для Telegram та HF) ───────────────
+# Hugging Face встановлює системні проксі, які блокують Telegram API.
+# Ми видаляємо їх з оточення процесу, щоб Python йшов напряму.
+for env_key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
+    if env_key in os.environ:
+        del os.environ[env_key]
+# ──────────────────────────────────────────────────────────────────────
+
 from api import taskscheduler
 from api.coreapiserver import with_global_lock
 from api.load_module_apis import load_module_apis
@@ -120,7 +128,6 @@ load_api(app)
 with_global_lock(app)
 
 # --- ТИМЧАСОВО ВИМКНЕНО: Планувальник завдань ---
-# Це зупинить помилки "Could not find the table public.scheduled_tasks"
 # taskscheduler.start_scheduler_once()
 log.info("⏸️  Планувальник завдань (Scheduler) тимчасово вимкнено.")
 
@@ -143,16 +150,18 @@ def start_telegram_bot_if_configured():
             return
 
         try:
+            # Тут важливо, щоб ми не ловили помилку проксі, бо ми її вже вимкнули вище
             tg_bot.get_bot_token()
         except Exception as exc:  # noqa: BLE001
             if not _telegram_disabled_logged:
-                log.info("TELEGRAM_BOT_TOKEN не задано (%s). Бот вимкнено.", exc)
+                log.info("TELEGRAM_BOT_TOKEN не задано або помилка (%s). Бот вимкнено.", exc)
                 _telegram_disabled_logged = True
             return
         _telegram_disabled_logged = False
 
         def _bot_worker():
             try:
+                # Оскільки проксі вимкнено глобально, run_bot() має працювати
                 tg_bot.run_bot()
             except Exception as exc:
                 log.exception("Telegram-бот впав: %s", exc)
@@ -209,7 +218,8 @@ if __name__ == "__main__":
     # Прогрів браузера (без інсталяції, бо вже є)
     threading.Thread(target=lambda: asyncio.run(warmup_browser()), daemon=True).start()
 
-    port = int(os.getenv("PORT", 8080))
+    # Hugging Face Spaces очікує порт 7860 за замовчуванням
+    port = int(os.getenv("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # ─────────────── Перерахунок цін (Опціонально) ───────────────
