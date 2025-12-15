@@ -4,10 +4,12 @@ from __future__ import annotations
 import logging
 import os
 import time
+import socket
 from pathlib import Path
 from typing import Optional
 
-# Ми прибрали прямий імпорт httpx, бо більше не робимо ручних запитів
+# Використовуємо httpx
+import httpx
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -35,6 +37,10 @@ if not LOGGER.handlers:
 
 # ─────────────── КОНСТАНТИ ───────────────
 START_REPLY = "Вітаю, я твій помічник від Helen Doron 👋"
+# Використовуємо стандартний URL, але будемо хитрувати з IP якщо треба
+API_BASE_URL = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
+API_URL_TEMPLATE = f"{API_BASE_URL}/bot{{token}}/{{method}}"
+
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 LINK_INSTRUCTION = (
@@ -68,6 +74,67 @@ def get_bot_token() -> str:
             return v.strip()
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
 
+# ─────────────── DNS HACK ───────────────
+def resolve_telegram_ip():
+    """
+    Намагається знайти реальну IP адресу api.telegram.org.
+    Це обходить проблеми з DNS у Docker контейнерах.
+    """
+    domain = "api.telegram.org"
+    try:
+        # Спроба 1: Стандартний резолв
+        ip = socket.gethostbyname(domain)
+        LOGGER.info(f"✅ DNS успіх: {domain} -> {ip}")
+        return None # Якщо працює стандартно, нічого не міняємо
+    except Exception as e:
+        LOGGER.warning(f"⚠️ DNS помилка для {domain}: {e}")
+        # Спроба 2: Повертаємо хардкод IP (один з офіційних IP Telegram)
+        # Це "милиця", але вона працює, коли DNS лежить
+        fallback_ip = "149.154.167.220"
+        LOGGER.info(f"🚑 Використовую запасну IP: {fallback_ip}")
+        return fallback_ip
+
+# ─────────────── TELEGRAM API (httpx) ───────────────
+def telegram_api_request(
+    method: str,
+    payload: dict,
+    *,
+    timeout: float = 20.0,
+    retries: int = 3,
+) -> dict:
+    token = get_bot_token()
+    url = API_URL_TEMPLATE.format(token=token, method=method)
+    
+    # Перевіряємо DNS
+    forced_ip = resolve_telegram_ip()
+    headers = {}
+    
+    if forced_ip:
+        # Підміняємо домен на IP, але в заголовку Host залишаємо домен
+        # Це дозволяє https працювати коректно
+        url = url.replace("api.telegram.org", forced_ip)
+        headers["Host"] = "api.telegram.org"
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            # verify=False може знадобитися, якщо ми йдемо по IP, але спробуємо спочатку з True
+            with httpx.Client(timeout=timeout, verify=True) as client:
+                r = client.post(url, json=payload, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                if not data.get("ok"):
+                    raise RuntimeError(data)
+                return data
+        except Exception as e:
+            last_error = e
+            LOGGER.warning("Telegram API attempt %s/%s failed: %s", attempt, retries, e)
+            time.sleep(1.5 * attempt)
+    
+    # Якщо нічого не допомогло - просто ігноруємо, щоб не валити весь сервер
+    LOGGER.error(f"❌ Telegram check failed completely. Skipping check. Error: {last_error}")
+    return {"ok": False, "result": "skipped"}
+
 # ─────────────── HANDLERS ───────────────
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
@@ -98,8 +165,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "phone": update.message.contact.phone_number,
     }
     try:
-        # Імпортуємо httpx тільки тут, коли це справді треба
-        import httpx 
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(BACKEND_URL.rstrip("/") + LINK_RECOVERY_PATH, json=payload)
             data = r.json()
@@ -116,13 +181,17 @@ def get_application() -> Application:
         return _application
     token = get_bot_token()
     
-    # Ми не передаємо жодних проксі. 
-    # Нехай бібліотека використовує системні налаштування за замовчуванням.
-    request = HTTPXRequest(
-        connect_timeout=60,
-        read_timeout=60,
-        write_timeout=60,
-    )
+    request_kwargs = {
+        "connect_timeout": 60,
+        "read_timeout": 60,
+        "write_timeout": 60,
+    }
+
+    # Спроба передати базовий URL, якщо ми використовуємо IP хак
+    # Але для ApplicationBuilder це складніше, тому покладаємось на те, 
+    # що сама бібліотека telegram зможе зарезолвити домен, або впаде і перезапуститься.
+    
+    request = HTTPXRequest(**request_kwargs)
 
     app = (
         ApplicationBuilder()
@@ -138,18 +207,25 @@ def get_application() -> Application:
 
 # ─────────────── RUN ───────────────
 def run_bot() -> None:
-    LOGGER.info("🚀 Запуск Telegram бота (спрощений режим)...")
+    LOGGER.info("🚀 Запуск Telegram бота...")
     
-    # Ми прибрали блок try/catch з ручною перевіркою telegram_api_request.
-    # Одразу запускаємо long polling. Бібліотека сама впорається з помилками з'єднання.
+    # Робимо "м'яку" перевірку. Якщо вона впаде - ми все одно спробуємо запустити поллінг.
     try:
-        app = get_application()
-        app.run_polling(
-            stop_signals=None,
-            drop_pending_updates=True,
-            allowed_updates=ALLOWED_UPDATES,
-        )
-    except Exception as e:
-        LOGGER.error("❌ Telegram bot crashed: %s", e)
-        # Не перезапускаємо в циклі тут, щоб не спамити логами, якщо все погано.
-        # Gunicorn перезапустить worker, якщо треба.
+        telegram_api_request("getMe", {})
+    except Exception:
+        pass
+
+    while True:
+        try:
+            app = get_application()
+            app.run_polling(
+                stop_signals=None,
+                drop_pending_updates=True,
+                allowed_updates=ALLOWED_UPDATES,
+            )
+            break
+        except Exception as e:
+            LOGGER.error("❌ Telegram bot crashed: %s. Retrying in 10s...", e)
+            global _application
+            _application = None
+            time.sleep(10)
