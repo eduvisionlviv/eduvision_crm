@@ -23,6 +23,7 @@ socket.getaddrinfo = patched_getaddrinfo
 # ------------------------------------------------
 
 import httpx
+# Додаємо підтримку telebot для сумісності з вашим старим кодом
 from telebot import TeleBot 
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
@@ -57,7 +58,7 @@ LINK_INSTRUCTION = (
 
 CHOOSING, TYPING_REPLY = range(2)
 
-# Додано список дозволених оновлень (те, чого не вистачало)
+# ✅ ОСЬ ЦЯ ЗМІННА, ЯКОЇ НЕ ВИСТАЧАЛО
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 _application: Optional[Application] = None
@@ -210,7 +211,6 @@ def build_conversation_handler() -> ConversationHandler:
 
 async def scheduled_heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
-    # Тут можна додати логіку, наприклад, пінгу бекенду
     # LOGGER.info(f"Heartbeat job: {job.data}")
 
 def configure_jobqueue(job_queue: JobQueue) -> None:
@@ -242,7 +242,6 @@ def get_application() -> Application:
         api_base = get_api_base()
         LOGGER.info(f"🌍 Використовую адресу API: {api_base}")
 
-        # Налаштування HTTP-клієнта (збільшені тайм-аути для стабільності)
         request = HTTPXRequest(
             connect_timeout=40.0,
             read_timeout=40.0,
@@ -253,25 +252,22 @@ def get_application() -> Application:
         application = (
             ApplicationBuilder()
             .token(token)
-            .base_url(api_base)  # <--- Ключовий момент для Cloudflare
+            .base_url(api_base)
             .request(request)
             .get_updates_request(request)
             .post_init(on_post_init)
             .build()
         )
 
-        # Реєстрація хендлерів
         application.add_handler(CommandHandler("start", handle_start))
         application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
         application.add_handler(build_conversation_handler())
         
-        # Налаштування черги задач
         configure_jobqueue(application.job_queue)
 
         _application = application
     return _application
 
-# Додатковий метод для сумісності, якщо десь в коді використовується telebot
 def get_telebot() -> TeleBot:
     global _telebot
     if _telebot is None:
@@ -279,10 +275,8 @@ def get_telebot() -> TeleBot:
     return _telebot
 
 def run_bot() -> None:
-    """Головна функція запуску (entry point)."""
     LOGGER.info("🚀 Ініціалізація бота з повною бізнес-логікою...")
     
-    # Вимикаємо шум від urllib3 (через проксі можуть бути попередження)
     import urllib3
     urllib3.disable_warnings()
 
@@ -290,7 +284,6 @@ def run_bot() -> None:
         try:
             app = get_application()
             
-            # Запускаємо в режимі Polling
             app.run_polling(
                 stop_signals=[], 
                 close_loop=False, 
