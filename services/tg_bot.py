@@ -1,4 +1,4 @@
-"""Telegram-bot: Syntax Fix + Correct Logic."""
+"""Telegram-bot: Syntax Fix + Correct Logic (Final Version)."""
 from __future__ import annotations
 
 import logging
@@ -69,6 +69,7 @@ def get_bot_token() -> str:
     if not token:
         for file_path in [os.getenv("TELEGRAM_BOT_TOKEN_FILE"), os.getenv("BOT_TOKEN_FILE")]:
             if file_path and os.path.exists(file_path):
+                # ВИПРАВЛЕНО: Синтаксис з with open розгорнуто
                 try:
                     with open(file_path, 'r') as f:
                         return f.read().strip()
@@ -139,16 +140,24 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(_link_callback_url(), json=payload)
             
-            if resp.status_code != 200:
-                LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
-                try:
-                    err_data = resp.json()
-                    err_msg = err_data.get('bot_text') or err_data.get('message') or "Помилка."
-                    await update.message.reply_text(f"⚠️ {err_msg}", reply_markup=ReplyKeyboardRemove())
-                except:
-                    await update.message.reply_text(f"⚠️ Помилка сервера ({resp.status_code}).", reply_markup=ReplyKeyboardRemove())
+            # --- ЛОГІКА ОБРОБКИ ПОМИЛКИ БЕКЕНДУ (400) ---
+            if resp.status_code == 400:
+                LOGGER.warning(f"CRM відхилила запит (400): {resp.text}")
+                # Ось тут ми кажемо користувачу, що треба йти на сайт
+                await update.message.reply_text(
+                    "❌ Не вдалося знайти ваш профіль.\n\n"
+                    "Схоже, що ви зайшли без спеціального коду. Будь ласка, перейдіть в особистий кабінет на сайті і використайте посилання для підключення Telegram.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
                 return
-
+            
+            # Обробка інших помилок
+            elif resp.status_code != 200:
+                LOGGER.error(f"Backend Error {resp.status_code}: {resp.text}")
+                await update.message.reply_text("⚠️ Технічна помилка на сервері. Спробуйте пізніше.", reply_markup=ReplyKeyboardRemove())
+                return
+            
+            # Успішний 200 OK
             data = resp.json()
         
         bot_text = data.get("bot_text") or data.get("message") or "Дякую! Успіх."
