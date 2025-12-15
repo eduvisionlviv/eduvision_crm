@@ -23,30 +23,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "ВСТАВТЕ_ТОКЕН_ЯКЩО_НЕМАЄ_В_ENV")
+# Отримуємо токен із змінних середовища (те, що ви налаштували в Secrets)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# --- 🔌 ФУНКЦІЯ-МОСТОК ДЛЯ MAIN.PY ---
+def get_bot_token():
+    """Цю функцію викликає main.py, щоб перевірити, чи є токен."""
+    return TOKEN
 
 # --- 1. ТУТ ВАШІ ФУНКЦІЇ (ХЕНДЛЕРИ) ---
-# Скопіюйте сюди ваші функції: start, button_click, handle_message тощо з попереднього файлу.
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приклад базової команди"""
-    await update.message.reply_text("Бот на зв'язку! Система стабілізована.")
+    """Обробка команди /start"""
+    user = update.effective_user
+    await update.message.reply_html(
+        rf"Вітаю, {user.mention_html()}! Я працюю стабільно 🚀"
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Я — тестовий бот HDE. Моя мережа тепер працює стабільно.")
+    """Обробка команди /help"""
+    await update.message.reply_text("Я готовий до роботи. Моя мережа налаштована.")
 
-# Якщо у вас були функції обробки кнопок або тексту, додайте їх тут 👇
-# async def my_custom_handler(update, context): ...
+async def echo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Приклад відповіді на текст (ехо)"""
+    await update.message.reply_text(f"Ви написали: {update.message.text}")
 
 
 # --- 2. ЛОГІКА ЗАПУСКУ (SYSTEM CORE) ---
 async def run_bot_logic():
     """Налаштування та запуск бота."""
     
-    # Посилені налаштування мережі (щоб не було помилок Timeout)
+    if not TOKEN:
+        logger.error("❌ Токен не знайдено! Перевірте Secrets.")
+        return
+
+    # Посилені налаштування мережі (HTTPXRequest)
     trequest = HTTPXRequest(
-        connection_pool_size=20, # Більше з'єднань
-        connect_timeout=30.0,    # Більше часу на підключення
+        connection_pool_size=20, 
+        connect_timeout=30.0,    
         read_timeout=30.0,
         write_timeout=30.0
     )
@@ -55,29 +69,26 @@ async def run_bot_logic():
     application = Application.builder().token(TOKEN).request(trequest).build()
 
     # --- 3. РЕЄСТРАЦІЯ ХЕНДЛЕРІВ ---
-    # Тут ми підключаємо функції до команд
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     
-    # 👇 ВІДНОВІТЬ ТУТ ВАШІ ХЕНДЛЕРИ 👇
-    # Наприклад:
-    # application.add_handler(CallbackQueryHandler(button_handler))
-    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    # Додаємо обробку тексту (щоб бот не мовчав)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo_handler))
     
-    # Встановлення меню команд (кнопка Menu зліва внизу)
+    # Встановлення меню команд
     await application.bot.set_my_commands([
-        BotCommand("start", "Перезапустити бота"),
+        BotCommand("start", "Запуск"),
         BotCommand("help", "Допомога"),
     ])
 
-    logger.info("🚀 Бот запускається...")
+    logger.info(f"🚀 Бот запускається з токеном: {TOKEN[:5]}***")
     
     # Ініціалізація та старт
     await application.initialize()
     await application.start()
     
-    # Запуск polling (очищаємо чергу старих апдейтів, щоб не спамив при старті)
+    # Запуск polling
     await application.updater.start_polling(drop_pending_updates=True)
     
     # Тримаємо процес живим
@@ -95,18 +106,18 @@ def start_bot_process():
     retry_count = 0
     while True:
         try:
-            # Створюємо чистий Event Loop (вирішує проблему "Loop closed")
+            # Створюємо чистий Event Loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
             if retry_count > 0:
-                logger.warning(f"🔄 Автоматичний перезапуск бота (Спроба #{retry_count})")
+                logger.warning(f"🔄 Рестарт бота (Спроба #{retry_count})")
             
             loop.run_until_complete(run_bot_logic())
             
         except Exception as e:
             logger.error(f"❌ Бот впав з помилкою: {e}")
-            logger.error("⏳ Чекаємо 10 секунд перед перезапуском...")
+            logger.error("⏳ Чекаємо 10 секунд...")
             time.sleep(10)
             retry_count += 1
         finally:
