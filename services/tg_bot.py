@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 # --- 💉 DNS HARDFIX (Лікуємо сліпоту сервера Hugging Face) ---
+# Це критично для роботи через Cloudflare Workers
 CF_IP = "104.21.80.1" 
 _original_getaddrinfo = socket.getaddrinfo
 
@@ -22,6 +23,7 @@ socket.getaddrinfo = patched_getaddrinfo
 # ------------------------------------------------
 
 import httpx
+# Додаємо підтримку telebot для сумісності з вашим старим кодом
 from telebot import TeleBot 
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
@@ -45,17 +47,20 @@ if not LOGGER.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-# --- ТЕКСТИ ---
+# --- КОНСТАНТИ ---
+# Текст, який буде завжди при старті
 START_REPLY = (
-    "Привіт! Я твій помічник від Helen Doron.\n"
-    "А хто ти? 🤔\n\n"
-    "Натисни кнопку нижче, щоб передати свій номер телефону для ідентифікації 👇"
+    "Вітаю! Я твій помічник від Helen Doron.\n\n"
+    "Щоб я міг тебе впізнати та надати доступ до інформації, мені потрібен твій номер телефону.\n"
+    "👇 Будь ласка, натисни кнопку нижче:"
 )
 
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 
 CHOOSING, TYPING_REPLY = range(2)
+
+# ✅ ОБОВ'ЯЗКОВА ЗМІННА
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 _application: Optional[Application] = None
@@ -96,10 +101,12 @@ def get_bot_token() -> str:
     return "" 
 
 def get_api_base() -> str:
+    """Визначає адресу API (Cloudflare Mirror)."""
     _load_env_from_file_once()
     custom_base = os.getenv("TELEGRAM_API_BASE")
     if not custom_base:
         return "https://api.telegram.org/bot"
+    
     base = custom_base.strip().rstrip("/")
     if not base.endswith("/bot"):
         base += "/bot"
@@ -110,31 +117,34 @@ def _link_callback_url() -> str:
     return f"{base}{LINK_RECOVERY_PATH}"
 
 
-# --- ХЕНДЛЕРИ (ОНОВЛЕНО) ---
+# --- ХЕНДЛЕРИ (Оновлена логіка кнопок) ---
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Привітання. Завжди показує кнопку телефону.
+    Обробляє /start.
+    Тепер кнопка показується ЗАВЖДИ.
     """
     if not update.message: return
 
-    # Якщо користувач прийшов за посиланням, зберігаємо токен
+    # Перевіряємо, чи є токен у посиланні (deep linking)
     args = context.args
     raw = args[0] if args else None
     token = raw.replace("-", ".") if raw else None
 
+    # Якщо токен є — запам'ятовуємо його, але кнопку показуємо все одно
     if token:
         context.user_data["link_token"] = token
         LOGGER.info(f"🔑 Отримано токен при старті: {token}")
 
-    # Створюємо кнопку (request_contact=True - це магія Telegram)
+    # --- СТВОРЕННЯ КНОПКИ ---
+    # request_contact=True змушує Telegram надіслати картку контакту
     markup = ReplyKeyboardMarkup(
         [[KeyboardButton("Поділитися телефоном ☎️", request_contact=True)]],
         resize_keyboard=True, 
         one_time_keyboard=True
     )
     
-    # Відправляємо повідомлення ЗАВЖДИ, незалежно від токена
+    # Відправляємо привітання З КНОПКОЮ
     await update.message.reply_text(START_REPLY, reply_markup=markup)
 
 
@@ -145,10 +155,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_token = context.user_data.get("link_token")
     contact = update.message.contact
     
-    # Перевірка "свій/чужий"
+    # Перевірка "свій/чужий" номер
     if contact.user_id and update.effective_user and contact.user_id != update.effective_user.id:
         await update.message.reply_text(
-            "Це не ваш номер. Будь ласка, натисніть кнопку внизу, щоб надіслати свій.",
+            "⚠️ Це не ваш номер. Будь ласка, натисніть кнопку внизу, щоб надіслати ВЛАСНИЙ номер.",
             reply_markup=ReplyKeyboardRemove()
         )
         return
@@ -185,14 +195,17 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
-# --- ІНШЕ (Діалоги, Черга, Ініціалізація) ---
+# --- ДІАЛОГИ ---
 
 async def conversation_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message: await update.message.reply_text("Діалог розпочато.")
+    if update.message:
+        await update.message.reply_text("Це демо-діалог. Напишіть щось.")
     return TYPING_REPLY
 
 async def conversation_store_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message: await update.message.reply_text("Збережено.")
+    if update.message:
+        context.user_data["last_reply"] = update.message.text
+        await update.message.reply_text("Збережено.")
     return ConversationHandler.END
 
 async def conversation_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -207,7 +220,7 @@ def build_conversation_handler() -> ConversationHandler:
     )
 
 def configure_jobqueue(job_queue: JobQueue) -> None:
-    pass # Поки пусто, щоб не спамило логами
+    pass 
 
 async def on_post_init(application: Application) -> None:
     try:
@@ -223,7 +236,7 @@ def get_application() -> Application:
     if _application is None:
         token = get_bot_token()
         api_base = get_api_base()
-        LOGGER.info(f"🌍 API: {api_base}")
+        LOGGER.info(f"🌍 API Base: {api_base}")
 
         request = HTTPXRequest(
             connect_timeout=40.0,
