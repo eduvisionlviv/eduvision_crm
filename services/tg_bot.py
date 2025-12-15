@@ -32,15 +32,18 @@ API_URL_TEMPLATE = "https://api.telegram.org/bot{token}/{method}"
 BACKEND_URL = os.getenv("URL", "http://127.0.0.1:5000")
 LINK_RECOVERY_PATH = "/api/tg/link_recovery"
 LINK_INSTRUCTION = (
-    "📱 Щоб підтвердити, що це саме ваш акаунт EduVision,\n"
+    "📱 Щоб підтвердити, що це саме ваш акаунт EduVision,\n",
     "будь ласка, поділіться своїм номером телефону, натиснувши кнопку нижче."
 )
 
 CHOOSING, TYPING_REPLY = range(2)
 
 _application: Optional[Application] = None
-_BOT_USERNAME: Optional[str] = os.getenv("BOT_USERNAME") or os.getenv(
-    "TELEGRAM_BOT_USERNAME"
+_BOT_USERNAME: Optional[str] = (
+    os.getenv("BOT_USERNAME")
+    or os.getenv("TELEGRAM_BOT_USERNAME")
+    or os.getenv("TELEGRAM_USERNAME")
+)
 ALLOWED_UPDATES = ["message", "contact", "callback_query"]
 
 __all__ = ["run_bot", "get_application"]
@@ -62,7 +65,6 @@ def get_bot_token() -> str:
     raise RuntimeError(
         "TELEGRAM_BOT_TOKEN не задано. Вкажіть TELEGRAM_BOT_TOKEN (або BOT_TOKEN / TELEGRAM_TOKEN)."
     )
-
 
 def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, retries: int = 3) -> dict:
     """Викликає Telegram Bot API через httpx з повторними спробами."""
@@ -86,10 +88,8 @@ def telegram_api_request(method: str, payload: dict, *, timeout: float = 15.0, r
 
     raise RuntimeError(last_error or "Unknown Telegram API error")
 
-
 # Синонім для зворотної сумісності і уникнення NameError у поточних лонгрunning-процесах
 _telegram_api_request = telegram_api_request
-
 
 def send_message_httpx(chat_id: int, text: str) -> bool:
     """Надсилає повідомлення через Bot API без запуску поллінгу."""
@@ -106,7 +106,6 @@ def send_message_httpx(chat_id: int, text: str) -> bool:
     except Exception as exc:
         LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
         return False
-
 
 def get_bot_username() -> str:
     """Повертає username бота або піднімає виняток із поясненням."""
@@ -127,77 +126,19 @@ def get_bot_username() -> str:
     except Exception as exc:
         raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
 
-
 def get_bot_status() -> dict:
     """Повертає зрозумілий статус налаштування Telegram-бота."""
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv(
-        "TELEGRAM_TOKEN"
-    )
-    status: dict = {"configured": bool(token)}
-
-    if not token:
-        status[
-            "message"
-        ] = "TELEGRAM_BOT_TOKEN не задано. Додайте TELEGRAM_BOT_TOKEN (або BOT_TOKEN / TELEGRAM_TOKEN)."
-        return status
-
     try:
-        status["bot_username"] = get_bot_username()
-        status["status"] = "ok"
-    except Exception as exc:
-        status["status"] = "error"
-        status["message"] = str(exc)
+        token = get_bot_token()
+    except RuntimeError as exc:
+        return {
+            "configured": False,
+            "status": "missing_token",
+            "message": str(exc),
+        }
 
-    return status
-
-
-def send_message_httpx(chat_id: int, text: str) -> bool:
-    """Надсилає повідомлення через Bot API без запуску поллінгу."""
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    try:
-        return True
-    except Exception as exc:
-        LOGGER.error("Не вдалося надіслати повідомлення в Telegram: %s", exc)
-        return False
-
-
-def get_bot_username() -> str:
-    """Повертає username бота або піднімає виняток із поясненням."""
-
-    global _BOT_USERNAME
-    if _BOT_USERNAME:
-        return _BOT_USERNAME
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN не задано")
-
-    try:
-        username = data.get("result", {}).get("username")
-        if not username:
-            raise RuntimeError("Bot API не повернув username")
-        _BOT_USERNAME = username
-        return username
-    except Exception as exc:
-        raise RuntimeError(f"Не вдалося отримати дані бота: {exc}") from exc
-
-
-def get_bot_status() -> dict:
-    """Повертає зрозумілий статус налаштування Telegram-бота."""
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    status: dict = {"configured": bool(token)}
-
-    if not token:
-        status["message"] = "TELEGRAM_BOT_TOKEN не задано. Додайте токен у змінні середовища."
-        return status
+    status: dict = {"configured": True}
 
     try:
         status["bot_username"] = get_bot_username()
@@ -310,7 +251,7 @@ def get_application() -> Application:
     global _application
     if _application is None:
         token = get_bot_token()
-        
+
         # Максимально лояльні налаштування мережі
         request_settings = HTTPXRequest(
             connect_timeout=60.0,
@@ -343,7 +284,7 @@ def run_bot() -> None:
     while True:
         try:
             application = get_application()
-main
+            telegram_api_request("getMe", {})  # швидка перевірка токена/мережі
             application.run_polling(
                 stop_signals=None,
                 bootstrap_retries=-1,
