@@ -134,16 +134,22 @@ except ImportError:
 # ─────────────── Telegram бот ───────────
 _telegram_thread = None
 _telegram_lock = threading.Lock()
+_telegram_disabled_logged = False
 
 def start_telegram_bot_if_configured():
-    global _telegram_thread
+    global _telegram_thread, _telegram_disabled_logged
     with _telegram_lock:
         if _telegram_thread and _telegram_thread.is_alive():
             return
 
-        if not os.getenv("TELEGRAM_BOT_TOKEN"):
-            log.info("TELEGRAM_BOT_TOKEN не задано. Бот вимкнено.")
+        try:
+            tg_bot.get_bot_token()
+        except Exception as exc:  # noqa: BLE001
+            if not _telegram_disabled_logged:
+                log.info("TELEGRAM_BOT_TOKEN не задано (%s). Бот вимкнено.", exc)
+                _telegram_disabled_logged = True
             return
+        _telegram_disabled_logged = False
 
         def _bot_worker():
             try:

@@ -112,6 +112,7 @@ INFO:werkzeug: * Running on http://0.0.0.0:8080
 
 ✅ You're in the admin dashboard!
 
+
 ### Готовий тестовий логін (плавний перехід)
 
 Якщо треба швидко увійти без реєстрації:
