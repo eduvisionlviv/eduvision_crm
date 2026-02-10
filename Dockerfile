@@ -34,7 +34,8 @@ COPY backend/ ./
 COPY --from=frontend-build /app/frontend/dist /usr/share/nginx/html
 
 # Copy configuration files
-COPY nginx.conf /etc/nginx/sites-available/default
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create necessary directories
