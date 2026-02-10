@@ -37,3 +37,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Lock files (can be regenerated)
+package-lock.json
