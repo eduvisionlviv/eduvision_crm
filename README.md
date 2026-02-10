@@ -22,6 +22,8 @@ docker run -p 3000:3000 eduvision-crm
 
 API доступне через `/api/` (наприклад, `/api/health`)
 
+**Примітка**: Усі backend маршрути повинні включати префікс `/api/` (наприклад, FastAPI endpoint `@app.get("/api/health")`)
+
 ### Деплой на Coolify
 
 1. У Coolify створіть новий проєкт
