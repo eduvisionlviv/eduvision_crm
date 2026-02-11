@@ -14,9 +14,9 @@ async def startup_event():
 
 @app.get("/api/health")
 async def health_check():
-    # ВИПРАВЛЕНО: Один загальний return
+    # Один return, який повертає все відразу
     return {
-        "status": "ok",
+        "status": "ok", 
         "message": "API is running",
         "database_connected": db.is_authenticated
     }
