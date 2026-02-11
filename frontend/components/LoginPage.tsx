@@ -10,24 +10,52 @@ export const LoginPage = () => {
   const [center, setCenter] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const LOGO_URL = "https://enguide.ua/image.php?width=300&height=168&crop&image=/s/public/upload/images/7b30/5c3c/e544/04d2/ed8b/256b/35b0/b74c.png";
 
   const centers: {id: string, name: string}[] = [];
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!center && centers.length > 0) {
-        alert("Please select a learning center");
-        return;
-    }
+    setError(null);
+
     setIsLoading(true);
-    // Simulate login
-    setTimeout(() => setIsLoading(false), 2000);
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          center,
+          email,
+          password,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        const msg =
+          data?.detail ||
+          data?.error ||
+          'Помилка входу, перевірте логін та пароль.';
+        setError(msg);
+        return;
+      }
+
+      const data = await res.json();
+      // TODO: за потреби збережи токен/користувача
+      // localStorage.setItem('authToken', data.token);
+      // localStorage.setItem('user', JSON.stringify(data.user));
+
+      window.location.href = '/';
+    } catch (err) {
+      setError('Сервер недоступний, спробуйте пізніше.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    // Try local file as fallback if external fails
     if (e.currentTarget.src !== window.location.origin + "/img/hd_logo.webp") {
         e.currentTarget.src = "img/hd_logo.webp";
     }
@@ -189,6 +217,12 @@ export const LoginPage = () => {
                         </div>
                     )}
                 </button>
+
+                {error && (
+                  <div className="mt-2 text-center text-xs text-red-400 bg-red-900/30 border border-red-500/30 rounded-lg px-3 py-2">
+                    {error}
+                  </div>
+                )}
 
                 {/* Registration Section */}
                 <div className="mt-8 pt-6 border-t border-white/10 text-center">
