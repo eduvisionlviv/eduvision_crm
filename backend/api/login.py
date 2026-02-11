@@ -40,8 +40,8 @@ def login_user(body: LoginRequest):
         # 2) Шукаємо по полю user_mail
         user = None
         for r in records:
-            # r у Python-SDK PocketBase – це dict-подібний об'єкт [web:42][web:48]
-            if r.get("user_mail") == body.email:
+            # Record поводиться як dict з доступом через [] [web:42][web:48]
+            if r["user_mail"] == body.email:
                 user = r
                 break
 
@@ -49,14 +49,14 @@ def login_user(body: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         # 3) Перевіряємо пароль з поля user_pass
-        stored_pass = user.get("user_pass")
+        stored_pass = user["user_pass"]
         if stored_pass != body.password:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         return {
             "status": "ok",
             "collection": "user_staff",
-            "token": user.get("id"),  # тимчасовий "токен"
+            "token": user["id"],  # тимчасовий "токен"
             "user": user,
         }
 
