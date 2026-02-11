@@ -1,51 +1,48 @@
 # =====================================================
-# CRM Eduvision - Production Dockerfile
+# CRM Eduvision - Dev/Stage Dockerfile
 # =====================================================
 
-# ==================== Stage 1: Build Frontend ====================
-FROM node:20-alpine AS frontend-builder
+# --- ЕТАП 1: Фронтенд (ЗАКОМЕНТОВАНО ДО ПОЯВИ ФАЙЛІВ) ---
+# Як тільки заллєте React-файли, розкоментуйте цей блок:
+# FROM node:20-alpine AS frontend-builder
+# WORKDIR /build
+# COPY frontend/package*.json ./
+# RUN npm install --prefer-offline --no-audit
+# COPY frontend/ ./
+# RUN npm run build
 
-WORKDIR /build
-
-# Copy frontend files
-COPY frontend/package*.json ./
-RUN npm install --prefer-offline --no-audit
-
-COPY frontend/ ./
-RUN npm run build
-
-# ==================== Stage 2: Python Application ====================
+# ==================== Stage 2: Python Backend ====================
 FROM python:3.14.2-slim
 
-# 1. Робоча директорія - корінь проекту всередині контейнера
+# Робоча папка
 WORKDIR /app
 
-# Install system dependencies
+# Системні залежності
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    wget \
-    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Python залежності
 COPY requirements.txt .
-
-# Upgrade pip and install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 2. Копіюємо папку backend
+# Копіюємо бекенд
 COPY backend/ ./backend/
 
-# 3. Копіюємо зібраний фронтенд
-COPY --from=frontend-builder /build/dist ./frontend/dist
+# --- ІНТЕГРАЦІЯ ФРОНТЕНДУ (ЗАКОМЕНТОВАНО) ---
+# Розкоментуйте цей рядок, коли розкоментуєте ЕТАП 1:
+# COPY --from=frontend-builder /build/dist ./frontend/dist
 
-# Create data directory
+# Папка для даних
 RUN mkdir -p /app/data
 
+# Порт
 EXPOSE 8080
 
+# Перевірка здоров'я
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 
-# 4. Запускаємо сервер (шлях: backend.main:app)
+# Запуск
 CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]
