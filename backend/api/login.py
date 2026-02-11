@@ -35,7 +35,7 @@ def login_user(body: LoginRequest):
 
     try:
         # 1) Витягуємо всі записи з user_staff
-        ecords = client.collection("user_staff").get_full_list()
+        records = client.collection("user_staff").get_full_list()
 
         user = None
         for r in records:
