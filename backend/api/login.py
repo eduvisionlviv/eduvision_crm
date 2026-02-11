@@ -35,12 +35,12 @@ def login_user(body: LoginRequest):
 
     try:
         # 1) Витягуємо всі записи з user_staff
-        records = client.collection("user_staff").get_full_list()
+        ecords = client.collection("user_staff").get_full_list()
 
         user = None
         for r in records:
-            # r.__dict__["collection"] містить реальні поля запису [web:42][web:48]
             data = getattr(r, "__dict__", {}).get("collection", {})
+            print("PB record:", data)  # DEBUG
             if data.get("user_mail") == body.email:
                 user = data
                 break
