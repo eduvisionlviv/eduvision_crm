@@ -1,0 +1,21 @@
+# Вказуємо, що нам треба і Python (для бекенду), і Node (для збірки фронтенду)
+[phases.setup]
+nixPkgs = ["python311", "nodejs_20"]
+
+# Встановлюємо залежності
+[phases.install]
+cmds = [
+    "python -m venv venv",
+    ". venv/bin/activate && pip install -r requirements.txt",
+    "npm install"
+]
+
+# Збираємо React (створюється папка dist)
+[phases.build]
+cmds = [
+    "npm run build"
+]
+
+# Запускаємо сервер
+[start]
+cmd = ". venv/bin/activate && python main.py"
