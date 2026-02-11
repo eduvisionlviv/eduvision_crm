@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
-    center: Optional[str] = None   # назва навчального центру з фронта
+    center: Optional[str] = None   # значення з селекту "Навчальний центр"
     email: str
     password: str
 
@@ -18,32 +18,45 @@ class LoginRequest(BaseModel):
 @router.post("/login")
 def login_user(body: LoginRequest):
     """
-    Якщо center порожній або 'Оберіть ваш центр...' → шукаємо в user_staff.
-    Інакше – у reg (тимчасова логіка).
+    Якщо center порожній або 'Оберіть ваш центр...' → логін у Base‑колекції user_staff
+    по полях user_mail / user_pass.
+    Для інших центрів логіку додамо пізніше.
     """
     client = db.get_client()
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # Визначаємо колекцію
-    if not body.center or body.center == "Оберіть ваш центр...":
-        collection_name = "user_staff"
-    else:
-        collection_name = "reg"
+    # Поки що підтримуємо тільки сценарій "Оберіть ваш центр..."
+    if body.center not in (None, "", "Оберіть ваш центр..."):
+        raise HTTPException(
+            status_code=400,
+            detail="Логін для вибраного навчального центру ще не реалізований",
+        )
 
     try:
-        # auth_with_password працює тільки для auth‑колекцій
-        auth = client.collection(collection_name).auth_with_password(
-            body.email,
-            body.password,
+        # шукаємо користувача за user_mail
+        records = client.collection("user_staff").get_full_list(
+            filter=f"user_mail = '{body.email}'"
         )
-    except Exception as e:
-        # 401 замість 500, щоб фронт бачив «неправильний логін/пароль»
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        if not records:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    return {
-        "status": "ok",
-        "collection": collection_name,
-        "token": auth.token,
-        "user": auth.record,
-    }
+        user = records[0]
+
+        # Порівнюємо пароль з поля user_pass
+        stored_pass = user.get("user_pass")
+        if stored_pass != body.password:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        # Тимчасовий "токен" – можна замінити на JWT пізніше
+        return {
+            "status": "ok",
+            "collection": "user_staff",
+            "token": user.get("id"),
+            "user": user,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
