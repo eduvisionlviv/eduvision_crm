@@ -3,7 +3,8 @@ from backend.environment import settings
 
 class Database:
     def __init__(self):
-        # settings.PB_URL тепер підтягнеться правильно після перейменування файлу
+        # Додайте цей рядок для діагностики:
+        print(f"DEBUG: Спроба підключення до URL: '{settings.PB_URL}'")
         self.client = PocketBase(settings.PB_URL)
         self.is_authenticated = False
 
