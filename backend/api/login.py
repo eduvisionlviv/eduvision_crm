@@ -1,3 +1,4 @@
+# backend/api/login.py
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -20,7 +21,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # поки що блочимо лише реально обраний центр, плейсхолдер/порожній рядок дозволяємо
+    # дозволяємо "" і "Оберіть ваш центр..."
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -28,10 +29,12 @@ def login_user(body: LoginRequest):
         )
 
     try:
+        # нормалізуємо те, що прийшло з фронта
         email = body.email.strip().lower()
         password = body.password.strip()
         print("LOGIN attempt:", email, password)
 
+        # читаємо всіх співробітників
         records = client.collection("user_staff").get_full_list()
 
         user = None
@@ -54,6 +57,7 @@ def login_user(body: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         db_pass = str(user.get("user_pass", "")).strip()
+        print("DB_PASS:", repr(db_pass), "INPUT_PASS:", repr(password))
         if db_pass != password:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
