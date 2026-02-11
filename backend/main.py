@@ -1,13 +1,16 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from backend.api.universal_api import router as universal_router
+from backend.api.login import router as login_router
 import os
 import asyncio
 
 from backend.services.pocketbase import db
 
 app = FastAPI(title="CRM Eduvision API")
-
+app.include_router(universal_router)
+app.include_router(login_router)
 
 @app.on_event("startup")
 async def startup_event():
