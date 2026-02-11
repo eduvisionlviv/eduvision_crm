@@ -5,7 +5,6 @@ from backend.environment import settings
 class Database:
     def __init__(self):
         print(f"DEBUG: Спроба підключення до URL: '{settings.PB_URL}'")
-        # Якщо URL не заданий – створюємо клієнт з None, але не падаємо
         self.client = PocketBase(settings.PB_URL) if settings.PB_URL else None
         self.is_authenticated = False
 
@@ -20,7 +19,9 @@ class Database:
                 settings.PB_ADMIN_EMAIL,
                 settings.PB_ADMIN_PASSWORD,
             )
-            self.is_authenticated = self.client.auth_store.is_valid
+
+            # ВАЖЛИВО: правильно перевіряємо авторизацію
+            self.is_authenticated = self.client.auth_store.model is not None
 
             if self.is_authenticated:
                 print(f"✅ Успішно підключено до PocketBase: {settings.PB_URL}")
@@ -28,7 +29,6 @@ class Database:
                 print("⚠️ Авторизація в PocketBase невалідна, але API працює")
         except Exception as e:
             print(f"❌ Помилка підключення до PocketBase: {e}")
-            # Не кидаємо виняток, щоб не завалити запуск сервера
             self.is_authenticated = False
 
     def get_client(self) -> PocketBase | None:
