@@ -1,19 +1,15 @@
 # backend/api/login.py
 from typing import Optional
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
 from backend.services.pocketbase import db
 
 router = APIRouter(prefix="/api", tags=["auth"])
-
 
 class LoginRequest(BaseModel):
     center: Optional[str] = None
     email: str
     password: str
-
 
 @router.post("/login")
 def login_user(body: LoginRequest):
@@ -21,7 +17,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # дозволяємо "" і "Оберіть ваш центр..."
+    # Перевірка центру
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -29,37 +25,45 @@ def login_user(body: LoginRequest):
         )
 
     try:
-        # нормалізуємо те, що прийшло з фронта
+        # 1. Отримуємо дані від користувача
         email = body.email.strip().lower()
-        password = body.password.strip()
-        print("LOGIN attempt:", email, password)
+        password_input = body.password.strip()
+        
+        print(f"LOGIN attempt for: {email}")
 
-        # читаємо всіх співробітників
+        # 2. Шукаємо користувача в базі
         records = client.collection("user_staff").get_full_list()
-
         user = None
+        
         for r in records:
-            if hasattr(r, "model_dump"):
-                data = r.model_dump()
-            elif hasattr(r, "to_dict"):
-                data = r.to_dict()
-            else:
-                data = getattr(r, "__dict__", {})
-
-            print("PB record:", data)
-
+            # Отримуємо словник даних незалежно від типу об'єкта
+            data = r.model_dump() if hasattr(r, "model_dump") else (r.to_dict() if hasattr(r, "to_dict") else getattr(r, "__dict__", {}))
+            
             db_email = str(data.get("user_mail", "")).strip().lower()
             if db_email == email:
                 user = data
                 break
 
         if not user:
+            print("User not found")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        db_pass = str(user.get("user_pass", "")).strip()
-        print("DB_PASS:", repr(db_pass), "INPUT_PASS:", repr(password))
-        if db_pass != password:
+        # 3. Отримуємо пароль з бази
+        password_db = str(user.get("user_pass", "")).strip()
+
+        # === ГОЛОВНЕ ВИПРАВЛЕННЯ ===
+        # Функція для заміни кириличної 'і' на латинську 'i'
+        def normalize_pass(text: str) -> str:
+            return text.replace("і", "i").replace("І", "I")
+
+        # Порівнюємо нормалізовані версії
+        if normalize_pass(password_db) != normalize_pass(password_input):
+            print(f"Password mismatch even after normalization.")
+            # Для глибокої відладки (можна видалити потім):
+            # print(f"DB codes: {[ord(c) for c in password_db]}")
+            # print(f"Input codes: {[ord(c) for c in password_input]}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
+        # ===========================
 
         return {
             "status": "ok",
