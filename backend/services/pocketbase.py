@@ -7,7 +7,6 @@ class Database:
         self.is_authenticated = False
 
     def connect(self):
-        """Метод для входу в систему як адміністратор"""
         try:
             # Спроба авторизації
             self.client.admins.auth_with_password(
@@ -15,12 +14,13 @@ class Database:
                 settings.PB_ADMIN_PASSWORD
             )
             
-            # ВИПРАВЛЕНО: статус перевіряється через auth_store
+            # ВАЖЛИВО: перевіряємо статус через auth_store
             self.is_authenticated = self.client.auth_store.is_valid
             
             if self.is_authenticated:
                 print(f"✅ Успішно підключено до PocketBase: {settings.PB_URL}")
         except Exception as e:
+            # Саме сюди потрапляє ваша помилка
             print(f"❌ Помилка підключення до PocketBase: {e}")
             self.is_authenticated = False
 
