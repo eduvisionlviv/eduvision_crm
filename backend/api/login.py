@@ -20,7 +20,6 @@ def login_user(body: LoginRequest):
     """
     Якщо center порожній або 'Оберіть ваш центр...' → логін у Base‑колекції user_staff
     по полях user_mail / user_pass.
-    Для інших центрів логіку додамо пізніше.
     """
     client = db.get_client()
     if not client:
@@ -34,25 +33,27 @@ def login_user(body: LoginRequest):
         )
 
     try:
-        # шукаємо користувача за user_mail
-        records = client.collection("user_staff").get_full_list(
-            filter=f"user_mail = '{body.email}'"
+        # шукаємо користувача за user_mail через get_list з filter
+        result = client.collection("user_staff").get_list(
+            page=1,
+            per_page=1,
+            filter=f"user_mail = '{body.email}'",
         )
-        if not records:
+        items = result.items if hasattr(result, "items") else []
+
+        if not items:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        user = records[0]
+        user = items[0]
 
-        # Порівнюємо пароль з поля user_pass
         stored_pass = user.get("user_pass")
         if stored_pass != body.password:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # Тимчасовий "токен" – можна замінити на JWT пізніше
         return {
             "status": "ok",
             "collection": "user_staff",
-            "token": user.get("id"),
+            "token": user.get("id"),  # тимчасовий "токен"
             "user": user,
         }
 
