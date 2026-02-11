@@ -3,18 +3,17 @@ from backend.environment import settings
 
 class Database:
     def __init__(self):
+        # settings.PB_URL тепер підтягнеться правильно після перейменування файлу
         self.client = PocketBase(settings.PB_URL)
         self.is_authenticated = False
 
     def connect(self):
         try:
-            # Спроба авторизації
             self.client.admins.auth_with_password(
                 settings.PB_ADMIN_EMAIL, 
                 settings.PB_ADMIN_PASSWORD
             )
-            
-            # ПРАВИЛЬНО: статус перевіряємо через auth_store
+            # ПРАВИЛЬНО: використовуємо auth_store
             self.is_authenticated = self.client.auth_store.is_valid
             
             if self.is_authenticated:
