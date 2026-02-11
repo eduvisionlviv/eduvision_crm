@@ -1,3 +1,7 @@
 fastapi
 uvicorn[standard]
 httpx
+bcrypt
+redis[hiredis]
+Pydantic
+passlib[bcrypt]
