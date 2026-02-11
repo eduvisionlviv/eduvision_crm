@@ -26,8 +26,8 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # Поки що підтримуємо тільки сценарій "Оберіть ваш центр..."
-    if body.center not in (None, "", "Оберіть ваш центр..."):
+    # Поки що: якщо явно вибрано якийсь центр (не порожній рядок і не None) – блочимо.
+    if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
             detail="Логін для вибраного навчального центру ще не реалізований",
