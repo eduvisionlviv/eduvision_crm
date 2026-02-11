@@ -41,8 +41,8 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # Create necessary directories
 RUN mkdir -p /var/log/supervisor
 
-# Expose port 3000
-EXPOSE 3000
+# Expose port 8080
+EXPOSE 8080
 
 # Start supervisor
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
