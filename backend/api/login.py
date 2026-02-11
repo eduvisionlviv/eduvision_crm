@@ -1,4 +1,3 @@
-# backend/api/login.py
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -21,6 +20,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
+    # поки що блочимо лише реально обраний центр, плейсхолдер/порожній рядок дозволяємо
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -28,13 +28,16 @@ def login_user(body: LoginRequest):
         )
 
     try:
+        email = body.email.strip().lower()
+        password = body.password.strip()
+        print("LOGIN attempt:", email, password)
+
         records = client.collection("user_staff").get_full_list()
 
         user = None
         for r in records:
-            # пробуємо отримати dict різними способами
             if hasattr(r, "model_dump"):
-                data = r.model_dump()          # новий pydantic-style [web:48]
+                data = r.model_dump()
             elif hasattr(r, "to_dict"):
                 data = r.to_dict()
             else:
@@ -42,16 +45,16 @@ def login_user(body: LoginRequest):
 
             print("PB record:", data)
 
-            # шукаємо по user_mail
-            if data.get("user_mail") == body.email:
+            db_email = str(data.get("user_mail", "")).strip().lower()
+            if db_email == email:
                 user = data
                 break
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        stored_pass = user.get("user_pass")
-        if stored_pass != body.password:
+        db_pass = str(user.get("user_pass", "")).strip()
+        if db_pass != password:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         return {
