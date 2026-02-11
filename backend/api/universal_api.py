@@ -13,7 +13,6 @@ router = APIRouter(prefix="/api", tags=["pb-universal"])
 # ───────────────────────────────
 # Ключ – «логічна» назва в API, значення – реальна PocketBase collection
 KNOWN_TABLES: Dict[str, str] = {
-    # приклади:
     "user_staff": "user_staff",
     "reg": "reg",
     # сюди потім додаватимеш:
@@ -37,8 +36,10 @@ def resolve_collection(table: str) -> str:
     if table not in KNOWN_TABLES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown table '{table}'. "
-                   f"Додай її у KNOWN_TABLES в universal_api.py.",
+            detail=(
+                f"Unknown table '{table}'. "
+                f"Додай її у KNOWN_TABLES в universal_api.py."
+            ),
         )
     return KNOWN_TABLES[table]
 
@@ -83,20 +84,31 @@ def pb_get(
     table: str,
     filters: Optional[List[str]] = Query(
         default=None,
-        description="Формат: col:op:value, напр. email:eq:test@test.com",
+        description="Формат: col:op:value, напр. user_mail:eq:test@test.com",
     ),
 ):
     client = db.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="PocketBase client not available")
+
     collection = resolve_collection(table)
 
     try:
         if not filters:
+            # get_full_list без фільтрів
             records = client.collection(collection).get_full_list()
             return records
 
         filter_str = build_filter_expr(filters)
-        records = client.collection(collection).get_full_list(filter=filter_str)
-        return records
+        # фільтр – через get_list
+        page_res = client.collection(collection).get_list(
+            page=1,
+            per_page=500,  # максимум, якщо треба більше – окремо продумати пагінацію
+            filter=filter_str,
+        )
+        items = page_res.items if hasattr(page_res, "items") else []
+        return items
+
     except HTTPException:
         raise
     except Exception as e:
@@ -109,6 +121,9 @@ def pb_get(
 @router.post("/pb/{table}")
 def pb_create(table: str, payload: CRUDPayload):
     client = db.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="PocketBase client not available")
+
     collection = resolve_collection(table)
 
     try:
@@ -124,6 +139,9 @@ def pb_create(table: str, payload: CRUDPayload):
 @router.patch("/pb/{table}/{record_id}")
 def pb_update(table: str, record_id: str, payload: CRUDPayload):
     client = db.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="PocketBase client not available")
+
     collection = resolve_collection(table)
 
     try:
@@ -139,6 +157,9 @@ def pb_update(table: str, record_id: str, payload: CRUDPayload):
 @router.delete("/pb/{table}/{record_id}")
 def pb_delete(table: str, record_id: str):
     client = db.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="PocketBase client not available")
+
     collection = resolve_collection(table)
 
     try:
