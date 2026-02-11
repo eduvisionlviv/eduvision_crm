@@ -6,3 +6,4 @@ redis[hiredis]
 Pydantic
 passlib[bcrypt]
 pocketbase
+pydantic-settings
