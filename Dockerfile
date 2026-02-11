@@ -7,10 +7,10 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /build
 
-# 1. Копіюємо конфіги пакетів
+# 1. Копіюємо файли пакетів (щоб кешувати залежності)
 COPY frontend/package*.json ./
 
-# 2. Встановлюємо залежності
+# 2. Встановлюємо залежності фронтенду
 RUN npm install --prefer-offline --no-audit
 
 # 3. Копіюємо весь код фронтенду
@@ -39,17 +39,19 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY backend/ ./backend/
 
 # --- ГОЛОВНИЙ МОМЕНТ ---
-# Копіюємо готовий фронтенд з першого етапу в папку, де його чекає Python
+# Беремо вже зібраний сайт (папку dist) з першого етапу
+# і кладемо його туди, де Python очікує його знайти
 COPY --from=frontend-builder /build/dist ./frontend/dist
 
-# Створюємо місце для бази даних
+# Створюємо папку для бази даних
 RUN mkdir -p /app/data
 
+# Відкриваємо порт
 EXPOSE 8080
 
 # Перевірка здоров'я
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 
-# Запуск сервера
+# Запускаємо сервер
 CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]
