@@ -37,26 +37,25 @@ def login_user(body: LoginRequest):
         # 1) Витягуємо всі записи з user_staff
         records = client.collection("user_staff").get_full_list()
 
-        # 2) Шукаємо по полю user_mail
         user = None
         for r in records:
-            # Record поводиться як dict з доступом через [] [web:42][web:48]
-            if r["user_mail"] == body.email:
-                user = r
+            # r.__dict__["collection"] містить реальні поля запису [web:42][web:48]
+            data = getattr(r, "__dict__", {}).get("collection", {})
+            if data.get("user_mail") == body.email:
+                user = data
                 break
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # 3) Перевіряємо пароль з поля user_pass
-        stored_pass = user["user_pass"]
+        stored_pass = user.get("user_pass")
         if stored_pass != body.password:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         return {
             "status": "ok",
             "collection": "user_staff",
-            "token": user["id"],  # тимчасовий "токен"
+            "token": user.get("id"),
             "user": user,
         }
 
