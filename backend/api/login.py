@@ -32,8 +32,17 @@ def login_user(body: LoginRequest):
 
         user = None
         for r in records:
-            data = getattr(r, "__dict__", {}).get("_data", {})
-            print("PB record:", data)  # тут має бути user_mail, user_pass, id
+            # пробуємо отримати dict різними способами
+            if hasattr(r, "model_dump"):
+                data = r.model_dump()          # новий pydantic-style [web:48]
+            elif hasattr(r, "to_dict"):
+                data = r.to_dict()
+            else:
+                data = getattr(r, "__dict__", {})
+
+            print("PB record:", data)
+
+            # шукаємо по user_mail
             if data.get("user_mail") == body.email:
                 user = data
                 break
