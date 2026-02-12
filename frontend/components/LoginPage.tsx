@@ -80,11 +80,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         const response = await fetch('/api/pb/lc');
         if (response.ok) {
           const data = await response.json();
-          // Assuming API returns { items: [...] } structure standard to PocketBase wrapper
+          // Universal API with Pydantic Schema returns 'name', not 'lc_name'
           const items = data.items || [];
           const centers = items.map((item: any) => ({
             id: item.id,
-            name: item.lc_name // Mapping 'lc_name' from DB
+            name: item.name || item.lc_name || 'Unnamed Center' // Fallback to lc_name just in case, but prefer name
           }));
           setAvailableCenters(centers);
         }
@@ -114,8 +114,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
       if (response.ok && result.status === 'ok') {
         onLoginSuccess({
-          name: result.user.user_name || 'User',
-          email: result.user.user_mail,
+          // Backend Schema mappings: user_name -> name, user_mail -> email, etc.
+          // Adjusting to accept both new cleaned format and potential raw format
+          name: result.user.name || result.user.user_name || 'User',
+          email: result.user.email || result.user.user_mail,
           role: result.user.role || 'staff',
           token: result.token
         });
@@ -135,6 +137,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
     
     // Preparing data for the 'reg' table
+    // Ensure keys match what Universal API expects (usually Snake Case matching DB or Pydantic Alias)
     const requestData = {
       center_id: regData.centerId,
       admin_name: regData.adminName.trim(),
@@ -156,7 +159,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         // Reset form
         setRegData({ ...regData, adminName: '', email: '', phoneNumber: '' });
       } else {
-        alert("Registration failed. Please try again.");
+        const errorData = await response.json();
+        alert(`Registration failed: ${errorData.detail || "Unknown error"}`);
       }
     } catch (error) {
        console.error(error);
