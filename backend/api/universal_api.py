@@ -7,9 +7,16 @@ from pydantic import BaseModel
 
 from backend.services.pocketbase import db
 
-# Імпортуємо схеми з твого файлу backend/api/schemas.py
-# (крапка означає імпорт з поточної папки)
-from .schemas import LCSchema, StaffSchema, RegSchema, BaseSchema
+# Імпортуємо всі схеми з schemas.py
+from .schemas import (
+    LCSchema, 
+    StaffSchema, 
+    RegSchema, 
+    CourseSchema, 
+    RoomSchema, 
+    SourceSchema,
+    BaseSchema
+)
 
 router = APIRouter(prefix="/api", tags=["pb-universal"])
 
@@ -22,7 +29,9 @@ TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "lc": LCSchema,
     "user_staff": StaffSchema,
     "reg": RegSchema,
-    # Додавай нові таблиці сюди: "courses": CourseSchema
+    "courses": CourseSchema,
+    "rooms": RoomSchema,
+    "sources": SourceSchema,
 }
 
 class CRUDPayload(BaseModel):
@@ -45,6 +54,7 @@ def build_filter_expr(filters: List[str]) -> str:
     """
     Конвертує прості фільтри format=col:op:val у PocketBase синтаксис.
     Підтримує: eq, neq, gt, lt, gte, lte, like.
+    Приклад: filters=lc_id:eq:123 -> lc_id = '123'
     """
     exprs: List[str] = []
     for raw in filters:
@@ -74,7 +84,7 @@ def build_filter_expr(filters: List[str]) -> str:
     return " && ".join(exprs)
 
 # ───────────────────────────────
-# 🔍 GET /api/pb/<table> - УНІВЕРСАЛЬНИЙ ПОШУК (З НОРМАЛІЗАЦІЄЮ)
+# 🔍 GET /api/pb/<table> - УНІВЕРСАЛЬНИЙ ПОШУК
 # ───────────────────────────────
 @router.get("/pb/{table}")
 def pb_get(
@@ -134,10 +144,9 @@ def pb_get(
             }
 
         # 4. 🔥 НОРМАЛІЗАЦІЯ ДАНИХ ЧЕРЕЗ PYDANTIC 🔥
-        # Це перетворить lc_name -> name, видалить зайві поля і перевірить типи
         clean_items = []
         for item in raw_items:
-            # Pydantic читає з атрибутів об'єкта PB (завдяки from_attributes=True)
+            # Pydantic читає з атрибутів об'єкта PB
             validated_obj = schema_class.model_validate(item)
             # Вивантажуємо в dict, використовуючи "чисті" імена (by_alias=False)
             clean_items.append(validated_obj.model_dump(by_alias=False))
@@ -163,12 +172,11 @@ def pb_create(table: str, payload: CRUDPayload):
     schema_class = resolve_schema(table)
     
     try:
-        # Примітка: При запису ми поки що довіряємо, що фронт шле правильні назви полів (як у базі),
-        # або можна додати логіку зворотного мапінгу (reverse mapping), якщо це критично.
-        # Зараз просто проксіюємо дані в базу.
+        # При створенні запису передаємо дані як є (передбачається, що фронт шле правильні ключі для БД)
+        # Або можна додати логіку зворотного мапінгу, якщо фронт шле API-ключі.
         record = client.collection(table).create(payload.data)
         
-        # Але повертаємо ми вже чистий об'єкт!
+        # Повертаємо вже чистий об'єкт
         validated = schema_class.model_validate(record)
         return validated.model_dump(by_alias=False)
         
@@ -189,7 +197,6 @@ def pb_update(table: str, record_id: str, payload: CRUDPayload):
     try:
         record = client.collection(table).update(record_id, payload.data)
         
-        # Повертаємо чистий об'єкт
         validated = schema_class.model_validate(record)
         return validated.model_dump(by_alias=False)
     except Exception as e:
@@ -204,8 +211,7 @@ def pb_delete(table: str, record_id: str):
     client = db.get_client()
     if not client: raise HTTPException(status_code=503)
 
-    # Перевірка на існування схеми (як міра безпеки доступу)
-    resolve_schema(table)
+    resolve_schema(table) # Перевірка доступу
 
     try:
         client.collection(table).delete(record_id)
