@@ -17,7 +17,7 @@ class LCSchema(BaseSchema):
     phone: Optional[str] = Field(default="", alias="lc_phone")
     currency: Optional[str] = Field(default="UAH") 
     
-    # Поля для статистики (їх можна буде заповнювати окремо або через хуки)
+    # Поля для статистики
     staff_count: Optional[int] = Field(default=0)
     student_count: Optional[int] = Field(default=0)
 
@@ -26,10 +26,8 @@ class StaffSchema(BaseSchema):
     id: str
     name: str = Field(alias="user_name")
     email: str = Field(alias="user_mail")
-    # Важливо: мапінг прав доступу на роль
     role: str = Field(alias="user_access") 
     
-    # Прив'язка до центру
     center_id: Optional[str] = Field(default=None, alias="lc_id") 
     
     avatar: Optional[str] = Field(default="")
@@ -50,7 +48,6 @@ class CourseSchema(BaseSchema):
     id: str
     name: str
     description: Optional[str] = ""
-    # Якщо курси прив'язані до конкретного центру
     center_id: Optional[str] = Field(default=None, alias="lc_id")
 
 # --- 5. Кімнати/Аудиторії (rooms) ---
@@ -63,6 +60,16 @@ class RoomSchema(BaseSchema):
 # --- 6. Джерела лідів (sources) ---
 class SourceSchema(BaseSchema):
     id: str
-    # Фронтенд використовує s.n, тому мапимо 'name' з бази в 'n'
     n: str = Field(alias="name") 
     active: bool = True
+
+# --- 7. НОВА ТАБЛИЦЯ (ШАБЛОН) ---
+# 👇 ЗМІНИ ЦЕЙ КЛАС ПІД СВОЮ ТАБЛИЦЮ
+class NewTableSchema(BaseSchema):
+    id: str
+    # Приклад полів (зміни на свої):
+    name: str = Field(default="", alias="field_name_in_db") 
+    status: Optional[str] = "active"
+    description: Optional[str] = ""
+    created: Optional[str] = ""
+    updated: Optional[str] = ""
