@@ -4,7 +4,10 @@ import { useTranslation } from '../contexts/LanguageContext';
 
 type ViewState = 'login' | 'register' | 'forgot';
 
-// Countries where Helen Doron English has a presence
+interface LoginPageProps {
+  onLoginSuccess: (user: any) => void;
+}
+
 const HD_COUNTRY_CODES = [
   { code: '+380', flag: '🇺🇦', country: 'Ukraine' },
   { code: '+355', flag: '🇦🇱', country: 'Albania' },
@@ -44,13 +47,12 @@ const HD_COUNTRY_CODES = [
   { code: '+84', flag: '🇻🇳', country: 'Vietnam' },
 ].sort((a, b) => a.country.localeCompare(b.country));
 
-// Moving Ukraine to top
 const COUNTRY_CODES = [
   { code: '+380', flag: '🇺🇦', country: 'Ukraine' },
   ...HD_COUNTRY_CODES.filter(c => c.code !== '+380')
 ];
 
-export const LoginPage = () => {
+export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const { t, language, setLanguage } = useTranslation();
   
   const [view, setView] = useState<ViewState>('login');
@@ -60,7 +62,6 @@ export const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Registration states
   const [regData, setRegData] = useState({
     centerId: '',
     adminName: '',
@@ -79,11 +80,16 @@ export const LoginPage = () => {
     
     // Normalization
     const normalizedEmail = email.trim().toLowerCase();
-    console.log("Login with:", normalizedEmail);
     
+    // SIMULATED API CALL
     setTimeout(() => {
       setIsLoading(false);
-      alert("Login simulation successful for " + normalizedEmail);
+      // Here you would normally receive data from your backend
+      onLoginSuccess({
+        name: 'Olena Administrativna',
+        email: normalizedEmail,
+        role: 'admin'
+      });
     }, 1500);
   };
 
@@ -91,15 +97,12 @@ export const LoginPage = () => {
     e.preventDefault();
     setIsLoading(true);
     
-    // Normalization
     const normalizedData = {
       centerId: regData.centerId,
       adminName: regData.adminName.trim(),
       email: regData.email.trim().toLowerCase(),
       fullPhone: `${regData.phonePrefix}${regData.phoneNumber.replace(/\D/g, '')}`
     };
-
-    console.log("Registering center with data:", normalizedData);
 
     setTimeout(() => {
       setIsLoading(false);
@@ -128,8 +131,6 @@ export const LoginPage = () => {
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden bg-hd-navy">
-      
-      {/* Background Animated Elements */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] md:w-[1200px] md:h-[1200px] opacity-10 animate-spin-slow">
             <img 
@@ -139,148 +140,76 @@ export const LoginPage = () => {
               className="w-full h-full object-contain filter blur-sm opacity-50" 
             />
           </div>
-          
           <div className="absolute top-[-10%] left-[-5%] w-96 h-96 bg-hd-gold/20 rounded-full blur-[100px] animate-pulse-glow" />
           <div className="absolute bottom-[-10%] right-[-5%] w-96 h-96 bg-hd-red/20 rounded-full blur-[100px] animate-pulse-glow" style={{animationDelay: '2s'}} />
           <div className="absolute top-[40%] right-[10%] w-64 h-64 bg-hd-green/20 rounded-full blur-[80px] animate-float" />
-          
           <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.04]"></div>
       </div>
 
-      {/* Main Content */}
       <div className="relative z-10 w-full max-w-[480px] px-4 py-8">
         <div className="glass-panel p-8 md:p-10 rounded-3xl shadow-2xl relative overflow-hidden">
-            
-            {/* Top accent line */}
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-hd-red via-hd-gold to-hd-green"></div>
-
-            {/* Language Switcher */}
             <div className="absolute top-6 right-6 flex items-center gap-1 bg-black/20 rounded-full p-1 border border-white/10">
-                <button 
-                    onClick={() => setLanguage('uk')}
-                    className={`px-2 py-1 text-xs font-bold rounded-full transition-all ${language === 'uk' ? 'bg-hd-gold text-hd-navy' : 'text-slate-400 hover:text-white'}`}
-                >
-                    UA
-                </button>
-                <button 
-                    onClick={() => setLanguage('en')}
-                    className={`px-2 py-1 text-xs font-bold rounded-full transition-all ${language === 'en' ? 'bg-hd-gold text-hd-navy' : 'text-slate-400 hover:text-white'}`}
-                >
-                    EN
-                </button>
+                <button onClick={() => setLanguage('uk')} className={`px-2 py-1 text-xs font-bold rounded-full transition-all ${language === 'uk' ? 'bg-hd-gold text-hd-navy' : 'text-slate-400 hover:text-white'}`}>UA</button>
+                <button onClick={() => setLanguage('en')} className={`px-2 py-1 text-xs font-bold rounded-full transition-all ${language === 'en' ? 'bg-hd-gold text-hd-navy' : 'text-slate-400 hover:text-white'}`}>EN</button>
             </div>
 
-            {/* Logo Area */}
             <div className="flex flex-col items-center justify-center mb-8 mt-2">
                 <div className="w-full max-w-[150px] mb-4 relative group cursor-pointer" onClick={() => setView('login')}>
                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-white/10 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-                   <img 
-                     src={LOGO_URL} 
-                     onError={handleImageError}
-                     alt="Helen Doron English" 
-                     className="w-full h-auto object-contain transform group-hover:scale-105 transition-transform duration-500 drop-shadow-2xl" 
-                   />
+                   <img src={LOGO_URL} onError={handleImageError} alt="Helen Doron English" className="w-full h-auto object-contain transform group-hover:scale-105 transition-transform duration-500 drop-shadow-2xl" />
                 </div>
                 <h1 className="text-xl font-extrabold text-white text-center leading-tight tracking-tight uppercase">
-                    {view === 'login' ? 'Helen Doron CRM' : view === 'register' ? t('register.title') : t('forgot.title')}
+                    {view === 'login' ? 'Helen Doron English' : view === 'register' ? t('register.title') : t('forgot.title')}
                 </h1>
             </div>
 
-            {/* LOGIN VIEW */}
             {view === 'login' && (
               <form onSubmit={handleLogin} className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('login.center')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Building2 size={18} />
-                          </div>
-                          <select
-                              value={center}
-                              onChange={(e) => setCenter(e.target.value)}
-                              className="block w-full pl-11 pr-10 py-3.5 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm"
-                          >
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Building2 size={18} /></div>
+                          <select value={center} onChange={(e) => setCenter(e.target.value)} className="block w-full pl-11 pr-10 py-3.5 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm">
                               <option value="" className="bg-hd-navy text-slate-400">{t('login.centerPlaceholder')}</option>
-                              {/* Future dynamic centers for login */}
+                              <option value="test" className="bg-hd-navy text-white">Kyiv Central Center</option>
                           </select>
-                          <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
-                            <ChevronDown size={16} />
-                          </div>
+                          <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400"><ChevronDown size={16} /></div>
                       </div>
                   </div>
 
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('login.email')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Mail size={18} />
-                          </div>
-                          <input 
-                              type="email" 
-                              value={email}
-                              onChange={(e) => setEmail(e.target.value)}
-                              className="block w-full pl-11 pr-4 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50"
-                              placeholder="username@helendoron.com"
-                              required 
-                          />
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Mail size={18} /></div>
+                          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="block w-full pl-11 pr-4 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50" placeholder="username@helendoron.com" required />
                       </div>
                   </div>
 
                   <div className="space-y-1.5">
                       <div className="flex items-center justify-between ml-1">
                           <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest opacity-80">{t('login.password')}</label>
-                          <button 
-                            type="button" 
-                            onClick={() => setView('forgot')}
-                            className="text-[10px] font-bold text-hd-gold hover:text-hd-gold/80 transition-colors uppercase tracking-wider"
-                          >
-                            {t('login.forgotPassword')}
-                          </button>
+                          <button type="button" onClick={() => setView('forgot')} className="text-[10px] font-bold text-hd-gold hover:text-hd-gold/80 transition-colors uppercase tracking-wider">{t('login.forgotPassword')}</button>
                       </div>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Lock size={18} />
-                          </div>
-                          <input 
-                              type={showPassword ? "text" : "password"}
-                              value={password}
-                              onChange={(e) => setPassword(e.target.value)}
-                              className="block w-full pl-11 pr-11 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50"
-                              placeholder="••••••••"
-                              required 
-                          />
-                          <button
-                              type="button"
-                              onClick={() => setShowPassword(!showPassword)}
-                              className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white transition-colors"
-                          >
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Lock size={18} /></div>
+                          <input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} className="block w-full pl-11 pr-11 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50" placeholder="••••••••" required />
+                          <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white transition-colors">
                               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                           </button>
                       </div>
                   </div>
 
-                  <button 
-                      type="submit" 
-                      disabled={isLoading}
-                      className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg hover:shadow-hd-gold/40 transform transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed group mt-2"
-                  >
+                  <button type="submit" disabled={isLoading} className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg hover:shadow-hd-gold/40 transform transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed group mt-2">
                       <span className={`flex items-center justify-center gap-2 ${isLoading ? 'opacity-0' : 'opacity-100'}`}>
                           {t('login.submit')} <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                       </span>
-                      {isLoading && (
-                          <div className="absolute inset-0 flex items-center justify-center text-hd-navy font-bold flex gap-2">
-                               <Loader2 className="animate-spin" size={18} /> {t('login.loading')}
-                          </div>
-                      )}
+                      {isLoading && <div className="absolute inset-0 flex items-center justify-center text-hd-navy font-bold flex gap-2"><Loader2 className="animate-spin" size={18} /> {t('login.loading')}</div>}
                   </button>
 
                   <div className="mt-8 pt-6 border-t border-white/10 text-center">
                       <p className="text-slate-400 text-[10px] mb-4 uppercase tracking-[0.2em] font-bold opacity-60">{t('login.noAccount')}</p>
-                      <button 
-                          type="button"
-                          onClick={() => setView('register')}
-                          className="w-full py-3.5 rounded-xl border border-white/10 hover:border-hd-gold/40 bg-white/5 hover:bg-white/10 text-white font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 group shadow-xl"
-                      >
+                      <button type="button" onClick={() => setView('register')} className="w-full py-3.5 rounded-xl border border-white/10 hover:border-hd-gold/40 bg-white/5 hover:bg-white/10 text-white font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 group shadow-xl">
                           <UserPlus size={16} className="text-hd-gold group-hover:scale-110 transition-transform" />
                           {t('login.register')}
                       </button>
@@ -288,68 +217,34 @@ export const LoginPage = () => {
               </form>
             )}
 
-            {/* REGISTER VIEW */}
             {view === 'register' && (
               <form onSubmit={handleRegister} className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500">
-                  
-                  {/* Center Name (Select) */}
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('register.centerName')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Building2 size={18} />
-                          </div>
-                          <select
-                              required
-                              value={regData.centerId}
-                              onChange={(e) => setRegData({...regData, centerId: e.target.value})}
-                              className="block w-full pl-11 pr-10 py-3 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm"
-                          >
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Building2 size={18} /></div>
+                          <select required value={regData.centerId} onChange={(e) => setRegData({...regData, centerId: e.target.value})} className="block w-full pl-11 pr-10 py-3 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm">
                               <option value="" disabled className="bg-hd-navy text-slate-400">{t('login.centerPlaceholder')}</option>
-                              {availableCenters.map(c => (
-                                <option key={c.id} value={c.id} className="bg-hd-navy text-white">{c.name}</option>
-                              ))}
-                              {availableCenters.length === 0 && (
-                                <option disabled className="bg-hd-navy text-slate-500 italic">No centers available yet</option>
-                              )}
+                              {availableCenters.map(c => (<option key={c.id} value={c.id} className="bg-hd-navy text-white">{c.name}</option>))}
+                              {availableCenters.length === 0 && (<option disabled className="bg-hd-navy text-slate-500 italic">No centers available yet</option>)}
                           </select>
-                          <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
-                            <ChevronDown size={16} />
-                          </div>
+                          <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400"><ChevronDown size={16} /></div>
                       </div>
                   </div>
 
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('register.adminName')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <User size={18} />
-                          </div>
-                          <input 
-                              type="text" 
-                              required
-                              value={regData.adminName}
-                              onChange={(e) => setRegData({...regData, adminName: e.target.value})}
-                              className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all"
-                              placeholder="John Smith"
-                          />
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><User size={18} /></div>
+                          <input type="text" required value={regData.adminName} onChange={(e) => setRegData({...regData, adminName: e.target.value})} className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all" placeholder="John Smith" />
                       </div>
                   </div>
 
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('login.email')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Mail size={18} />
-                          </div>
-                          <input 
-                              type="email" 
-                              required
-                              value={regData.email}
-                              onChange={(e) => setRegData({...regData, email: e.target.value})}
-                              className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all"
-                              placeholder="admin@helendoron.com"
-                          />
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Mail size={18} /></div>
+                          <input type="email" required value={regData.email} onChange={(e) => setRegData({...regData, email: e.target.value})} className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all" placeholder="admin@helendoron.com" />
                       </div>
                   </div>
 
@@ -357,99 +252,41 @@ export const LoginPage = () => {
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('register.phone')}</label>
                       <div className="flex gap-2">
                           <div className="relative w-[130px] flex-shrink-0 group/prefix">
-                              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400 group-focus-within/prefix:text-hd-gold transition-colors">
-                                <Globe size={14} />
-                              </div>
-                              <select 
-                                value={regData.phonePrefix}
-                                onChange={(e) => setRegData({...regData, phonePrefix: e.target.value})}
-                                className="w-full pl-9 pr-6 py-3 input-glass rounded-xl text-white text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all"
-                              >
-                                {COUNTRY_CODES.map(c => (
-                                  <option key={`${c.country}-${c.code}`} value={c.code} className="bg-hd-navy text-white">
-                                    {c.flag} {c.code}
-                                  </option>
-                                ))}
+                              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-slate-400 group-focus-within/prefix:text-hd-gold transition-colors"><Globe size={14} /></div>
+                              <select value={regData.phonePrefix} onChange={(e) => setRegData({...regData, phonePrefix: e.target.value})} className="w-full pl-9 pr-6 py-3 input-glass rounded-xl text-white text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all">
+                                {COUNTRY_CODES.map(c => (<option key={`${c.country}-${c.code}`} value={c.code} className="bg-hd-navy text-white">{c.flag} {c.code}</option>))}
                               </select>
-                              <div className="absolute inset-y-0 right-2 flex items-center pointer-events-none text-slate-400">
-                                <ChevronDown size={14} />
-                              </div>
+                              <div className="absolute inset-y-0 right-2 flex items-center pointer-events-none text-slate-400"><ChevronDown size={14} /></div>
                           </div>
                           <div className="relative flex-grow group/input">
-                              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                                  <Phone size={16} />
-                              </div>
-                              <input 
-                                  type="tel" 
-                                  required
-                                  value={regData.phoneNumber}
-                                  onChange={(e) => setRegData({...regData, phoneNumber: e.target.value})}
-                                  className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all"
-                                  placeholder="990001122"
-                              />
+                              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Phone size={16} /></div>
+                              <input type="tel" required value={regData.phoneNumber} onChange={(e) => setRegData({...regData, phoneNumber: e.target.value})} className="block w-full pl-11 pr-4 py-3 input-glass rounded-xl text-white text-sm focus:ring-2 focus:ring-hd-gold/50 transition-all" placeholder="990001122" />
                           </div>
                       </div>
                   </div>
 
-                  <button 
-                      type="submit" 
-                      disabled={isLoading}
-                      className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg transform transition-all active:scale-[0.98] mt-2"
-                  >
+                  <button type="submit" disabled={isLoading} className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg transform transition-all active:scale-[0.98] mt-2">
                       {isLoading ? <Loader2 className="animate-spin mx-auto" size={20} /> : t('register.submit')}
                   </button>
 
-                  <button 
-                      type="button"
-                      onClick={() => setView('login')}
-                      className="w-full py-2 text-slate-400 hover:text-white text-[10px] font-black uppercase tracking-[0.2em] transition-colors flex items-center justify-center gap-2"
-                  >
-                      <ArrowLeft size={14} /> {t('register.back')}
-                  </button>
+                  <button type="button" onClick={() => setView('login')} className="w-full py-2 text-slate-400 hover:text-white text-[10px] font-black uppercase tracking-[0.2em] transition-colors flex items-center justify-center gap-2"><ArrowLeft size={14} /> {t('register.back')}</button>
               </form>
             )}
 
-            {/* FORGOT PASSWORD VIEW */}
             {view === 'forgot' && (
               <form onSubmit={handleForgot} className="space-y-5 animate-in fade-in slide-in-from-left-4 duration-500">
-                  <div className="text-center mb-2 px-2">
-                    <p className="text-slate-300 text-sm leading-relaxed opacity-80 font-medium italic">
-                      {t('forgot.description')}
-                    </p>
-                  </div>
-
+                  <div className="text-center mb-2 px-2"><p className="text-slate-300 text-sm leading-relaxed opacity-80 font-medium italic">{t('forgot.description')}</p></div>
                   <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-300 uppercase tracking-widest ml-1 opacity-80">{t('login.email')}</label>
                       <div className="relative group/input">
-                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors">
-                              <Mail size={18} />
-                          </div>
-                          <input 
-                              type="email" 
-                              value={email}
-                              onChange={(e) => setEmail(e.target.value)}
-                              className="block w-full pl-11 pr-4 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50"
-                              placeholder="username@helendoron.com"
-                              required 
-                          />
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Mail size={18} /></div>
+                          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="block w-full pl-11 pr-4 py-3.5 input-glass rounded-xl text-white placeholder-slate-500 transition-all text-sm focus:ring-2 focus:ring-hd-gold/50" placeholder="username@helendoron.com" required />
                       </div>
                   </div>
-
-                  <button 
-                      type="submit" 
-                      disabled={isLoading}
-                      className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg transform transition-all active:scale-[0.98] mt-2"
-                  >
+                  <button type="submit" disabled={isLoading} className="w-full relative overflow-hidden h-12 rounded-xl bg-gradient-to-r from-hd-gold to-[#e6c245] text-hd-navy font-black text-sm uppercase tracking-widest shadow-lg transform transition-all active:scale-[0.98] mt-2">
                       {isLoading ? <Loader2 className="animate-spin mx-auto" size={20} /> : t('forgot.submit')}
                   </button>
-
-                  <button 
-                      type="button"
-                      onClick={() => setView('login')}
-                      className="w-full py-2 text-slate-400 hover:text-white text-[10px] font-black uppercase tracking-[0.2em] transition-colors flex items-center justify-center gap-2"
-                  >
-                      <ArrowLeft size={14} /> {t('forgot.back')}
-                  </button>
+                  <button type="button" onClick={() => setView('login')} className="w-full py-2 text-slate-400 hover:text-white text-[10px] font-black uppercase tracking-[0.2em] transition-colors flex items-center justify-center gap-2"><ArrowLeft size={14} /> {t('forgot.back')}</button>
               </form>
             )}
 

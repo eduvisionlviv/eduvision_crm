@@ -27,5 +27,43 @@ export const en = {
     description: "Enter your email and we will send you instructions to reset your password.",
     submit: "Send Instructions",
     back: "Remembered? Login"
+  },
+  nav: {
+    dashboard: "Dashboard",
+    students: "Students",
+    schedule: "Schedule",
+    finance: "Finance",
+    marketing: "Marketing",
+    reports: "Reports",
+    settings: "Settings",
+    logout: "Logout"
+  },
+  dashboard: {
+    welcome: "Welcome,",
+    stats_students: "Active Students",
+    stats_leads: "New Leads",
+    stats_attendance: "Attendance",
+    stats_revenue: "Monthly Revenue",
+    recent_activity: "Recent Activity",
+    quick_actions: "Quick Actions"
+  },
+  settings: {
+    profile: "My Profile",
+    security: "Security",
+    admin_panel: "Admin Panel",
+    personal_info: "Personal Info",
+    save_changes: "Save Changes",
+    change_password: "Change Password",
+    old_password: "Old Password",
+    new_password: "New Password",
+    confirm_password: "Confirm New Password",
+    centers: "Centers",
+    staff: "Staff & Roles",
+    courses: "Courses",
+    rooms: "Rooms",
+    sources: "Sources",
+    add_staff: "Add Staff",
+    add_course: "Add Course",
+    add_center: "Add Center"
   }
 };
