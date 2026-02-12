@@ -1,5 +1,6 @@
 # backend/api/universal_api.py
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -11,11 +12,9 @@ router = APIRouter(prefix="/api", tags=["pb-universal"])
 # ───────────────────────────────
 # 🔖 Реєстр відомих таблиць
 # ───────────────────────────────
-# Ключ – «логічна» назва в API, значення – реальна PocketBase collection
 KNOWN_TABLES: Dict[str, str] = {
     "user_staff": "user_staff",
     "reg": "reg",
-    # сюди потім додаватимеш:
     # "courses": "courses",
     # "centers": "centers",
 }
@@ -26,28 +25,53 @@ class CRUDPayload(BaseModel):
 
 
 # ───────────────────────────────
-# 🧩 Допоміжне
+# 🧩 Допоміжне: Робота з типами
 # ───────────────────────────────
 def resolve_collection(table: str) -> str:
-    """
-    Переводить «логічну» назву в реальну колекцію PocketBase.
-    Якщо немає в KNOWN_TABLES – 400.
-    """
     if table not in KNOWN_TABLES:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Unknown table '{table}'. "
-                f"Додай її у KNOWN_TABLES в universal_api.py."
-            ),
+            detail=f"Unknown table '{table}'. Додай її у KNOWN_TABLES.",
         )
     return KNOWN_TABLES[table]
+
+
+def clean_rich_text(text: str) -> str:
+    """Видаляє HTML-теги, якщо поле було RichText (наприклад <p>value</p>)."""
+    # Якщо рядок виглядає як HTML (починається з тега), чистимо його
+    if text and "<" in text and ">" in text:
+        return re.sub(r'<[^>]+>', '', text).strip()
+    return text
+
+
+def sanitize_record(record: Any) -> Dict[str, Any]:
+    """
+    Конвертує запис у словник і очищає рядкові поля від HTML-сміття.
+    """
+    # 1. Конвертація в dict
+    if hasattr(record, "model_dump"):
+        data = record.model_dump()
+    elif hasattr(record, "to_dict"):
+        data = record.to_dict()
+    elif isinstance(record, dict):
+        data = record
+    else:
+        data = getattr(record, "__dict__", {})
+
+    # 2. Очищення полів
+    clean_data = {}
+    for key, val in data.items():
+        if isinstance(val, str):
+            clean_data[key] = clean_rich_text(val)
+        else:
+            clean_data[key] = val
+    return clean_data
 
 
 def build_filter_expr(filters: List[str]) -> str:
     """
     filters=col:op:value → PocketBase filter string.
-    Підтримує: eq, neq, gt, lt, gte, lte, like, ilike
+    Враховує типи: числа, true/false/null не бере в лапки.
     """
     exprs: List[str] = []
     for raw in filters:
@@ -56,19 +80,29 @@ def build_filter_expr(filters: List[str]) -> str:
             raise HTTPException(status_code=400, detail=f"Bad filter: {raw}")
         col, op, val = parts
 
+        # Визначаємо, чи треба брати значення в лапки
+        # Якщо це число, bool або null - лапки не потрібні для SQL PocketBase
+        if val.lower() in ["true", "false", "null"]:
+            safe_val = val.lower()
+        elif val.replace(".", "", 1).isdigit(): # Проста перевірка на число
+            safe_val = val
+        else:
+            safe_val = f"'{val}'"
+
         if op == "eq":
-            exprs.append(f"{col} = '{val}'")
+            exprs.append(f"{col} = {safe_val}")
         elif op == "neq":
-            exprs.append(f"{col} != '{val}'")
+            exprs.append(f"{col} != {safe_val}")
         elif op == "gt":
-            exprs.append(f"{col} > '{val}'")
+            exprs.append(f"{col} > {safe_val}")
         elif op == "lt":
-            exprs.append(f"{col} < '{val}'")
+            exprs.append(f"{col} < {safe_val}")
         elif op == "gte":
-            exprs.append(f"{col} >= '{val}'")
+            exprs.append(f"{col} >= {safe_val}")
         elif op == "lte":
-            exprs.append(f"{col} <= '{val}'")
+            exprs.append(f"{col} <= {safe_val}")
         elif op in ("like", "ilike"):
+            # Для like завжди потрібні лапки, бо це рядкова операція
             exprs.append(f"{col} ~ '{val}'")
         else:
             raise HTTPException(status_code=400, detail=f"Unknown operator: {op}")
@@ -82,10 +116,7 @@ def build_filter_expr(filters: List[str]) -> str:
 @router.get("/pb/{table}")
 def pb_get(
     table: str,
-    filters: Optional[List[str]] = Query(
-        default=None,
-        description="Формат: col:op:value, напр. user_mail:eq:test@test.com",
-    ),
+    filters: Optional[List[str]] = Query(default=None),
 ):
     client = db.get_client()
     if not client:
@@ -95,19 +126,20 @@ def pb_get(
 
     try:
         if not filters:
-            # get_full_list без фільтрів
             records = client.collection(collection).get_full_list()
-            return records
+            # Проходимось по записах і чистимо їх
+            return [sanitize_record(r) for r in records]
 
         filter_str = build_filter_expr(filters)
-        # фільтр – через get_list
+        
         page_res = client.collection(collection).get_list(
             page=1,
-            per_page=500,  # максимум, якщо треба більше – окремо продумати пагінацію
+            per_page=500,
             filter=filter_str,
         )
         items = page_res.items if hasattr(page_res, "items") else []
-        return items
+        # Теж чистимо
+        return [sanitize_record(r) for r in items]
 
     except HTTPException:
         raise
@@ -128,7 +160,8 @@ def pb_create(table: str, payload: CRUDPayload):
 
     try:
         record = client.collection(collection).create(payload.data)
-        return record
+        # Повертаємо чистий запис
+        return sanitize_record(record)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -146,7 +179,7 @@ def pb_update(table: str, record_id: str, payload: CRUDPayload):
 
     try:
         record = client.collection(collection).update(record_id, payload.data)
-        return record
+        return sanitize_record(record)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
