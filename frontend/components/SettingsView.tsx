@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Lock, 
@@ -23,7 +23,8 @@ import {
   Coins,
   ArrowRight,
   ExternalLink,
-  Inbox
+  Inbox,
+  Loader2
 } from 'lucide-react';
 import { useTranslation } from '../contexts/LanguageContext';
 
@@ -38,26 +39,90 @@ interface Center {
   phone: string;
   currency: string;
   staffCount: number;
-  studentCount: number;
+}
+
+interface StaffMember {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
   const { t } = useTranslation();
-  const [activeMainTab, setActiveMainTab] = useState<'profile' | 'admin'>(user.role === 'admin' ? 'admin' : 'profile');
+  const isAdmin = user.role === 'admin';
+  const [activeMainTab, setActiveMainTab] = useState<'profile' | 'admin'>(isAdmin ? 'admin' : 'profile');
   const [activeProfileSubTab, setActiveProfileSubTab] = useState<'info' | 'security'>('info');
   
   // Admin State
   const [selectedCenter, setSelectedCenter] = useState<Center | null>(null);
   const [activeAdminSubTab, setActiveAdminSubTab] = useState<'info' | 'staff' | 'courses' | 'rooms' | 'sources'>('info');
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Real production state would be fetched from API
+  // Data States
   const [centers, setCenters] = useState<Center[]>([]);
-  const [staff, setStaff] = useState<any[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [sources, setSources] = useState<any[]>([]);
 
-  const isAdmin = user.role === 'admin';
+  // 1. Fetch Centers when Admin tab is active
+  useEffect(() => {
+    if (activeMainTab === 'admin') {
+      const fetchCenters = async () => {
+        setIsLoading(true);
+        try {
+          const res = await fetch('/api/pb/lc');
+          if (res.ok) {
+            const data = await res.json();
+            // Мапимо дані з БД у наш інтерфейс
+            const mappedCenters = (data.items || []).map((item: any) => ({
+              id: item.id,
+              name: item.lc_name,
+              address: item.lc_address || '',
+              phone: item.lc_phone || '',
+              currency: 'UAH', // Можна додати поле в БД, якщо треба
+              staffCount: 0 // Це треба буде рахувати окремим запитом або агрегацією
+            }));
+            setCenters(mappedCenters);
+          }
+        } catch (error) {
+          console.error("Error fetching centers:", error);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      fetchCenters();
+    }
+  }, [activeMainTab]);
+
+  // 2. Fetch Staff/Data when a Center is selected
+  useEffect(() => {
+    if (selectedCenter && activeAdminSubTab === 'staff') {
+      const fetchStaff = async () => {
+        try {
+          // Фільтруємо співробітників по ID центру
+          // Припускаємо, що універсальний API підтримує ?filters=lc_id:eq:ID
+          // АБО, якщо це таблиця user_staff, вона може мати поле lc_id (або center_id)
+          // Перевірте точну назву поля в БД. Тут використовую 'lc_id' як приклад.
+          const res = await fetch(`/api/pb/user_staff?filters=lc_id:eq:${selectedCenter.id}`); 
+          if (res.ok) {
+            const data = await res.json();
+            const mappedStaff = (data.items || []).map((item: any) => ({
+              id: item.id,
+              name: item.user_name || item.name,
+              email: item.user_mail || item.email,
+              role: item.user_role || item.role
+            }));
+            setStaff(mappedStaff);
+          }
+        } catch (error) {
+          console.error("Error fetching staff:", error);
+        }
+      };
+      fetchStaff();
+    }
+  }, [selectedCenter, activeAdminSubTab]);
 
   const EmptyState = ({ message, actionLabel, onAction, icon: Icon = Inbox }: any) => (
     <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in zoom-in duration-500">
@@ -224,7 +289,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                   </button>
                 </div>
 
-                {centers.length > 0 ? (
+                {isLoading ? (
+                  <div className="flex justify-center py-20"><Loader2 className="animate-spin text-hd-navy" size={40} /></div>
+                ) : centers.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
                     {centers.map((center) => (
                       <div 
@@ -245,7 +312,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                           <div className="mt-4 space-y-2">
                             <div className="flex items-start gap-2 text-slate-400">
                               <MapPin size={12} className="mt-0.5 flex-shrink-0" />
-                              <span className="text-[10px] font-bold line-clamp-1">{center.address}</span>
+                              <span className="text-[10px] font-bold line-clamp-1">{center.address || 'Адресу не вказано'}</span>
                             </div>
                           </div>
                         </div>
@@ -253,7 +320,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                            <div className="flex gap-3">
                               <div className="flex flex-col">
                                  <span className="text-[8px] font-black uppercase text-slate-300 tracking-tighter">Співробітники</span>
-                                 <span className="text-xs font-black text-hd-navy">{center.staffCount}</span>
+                                 <span className="text-xs font-black text-hd-navy">{center.staffCount || '-'}</span>
                               </div>
                            </div>
                            <div className="w-8 h-8 rounded-xl bg-slate-50 flex items-center justify-center text-slate-300 group-hover:bg-hd-navy group-hover:text-hd-gold transition-all">
@@ -277,7 +344,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                       <button onClick={() => setSelectedCenter(null)} className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400 hover:bg-hd-navy hover:text-white transition-all shadow-inner border border-slate-100"><ChevronLeft size={24} /></button>
                       <div>
                         <div className="flex items-center gap-2 mb-1">
-                           <span className="text-[9px] font-black uppercase text-hd-gold tracking-[0.2em]">Навчальний центр LCF</span>
+                           <span className="text-[9px] font-black uppercase text-hd-gold tracking-[0.2em]">Навчальний центр</span>
                            <div className="w-1 h-1 rounded-full bg-slate-200"></div>
                            <span className="text-[9px] font-black uppercase text-slate-400 tracking-[0.2em]">{selectedCenter.id}</span>
                         </div>
@@ -364,6 +431,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                                                    <p className="text-[10px] text-slate-400 font-medium">{s.email}</p>
                                                 </div>
                                              </div>
+                                          </td>
+                                          <td className="px-6 py-4">
+                                            <span className="px-2 py-1 bg-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase">{s.role}</span>
                                           </td>
                                           <td className="px-6 py-4 text-right rounded-r-2xl">
                                              <button className="p-2 text-slate-300 hover:text-hd-navy"><Pencil size={16} /></button>
