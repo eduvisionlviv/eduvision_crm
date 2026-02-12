@@ -113,15 +113,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       const result = await response.json();
 
       if (response.ok && result.status === 'ok') {
-        // === ВИПРАВЛЕННЯ МАПІНГУ ПОЛІВ ===
-        // Використовуємо user_role, user_name, user_mail згідно зі структурою БД
         onLoginSuccess({
-          id: result.user.id,
-          name: result.user.user_name || result.user.name || 'User',
-          email: result.user.user_mail || result.user.email,
-          role: result.user.user_role || result.user.role || 'staff', // Тут була проблема
-          token: result.token,
-          centerId: center
+          name: result.user.user_name || 'User',
+          email: result.user.user_mail,
+          role: result.user.role || 'staff',
+          token: result.token
         });
       } else {
         alert(result.detail || "Login failed");
