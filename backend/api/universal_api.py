@@ -1,3 +1,4 @@
+# backend/api/universal_api.py
 import json
 from typing import Any, Dict, List, Optional, Type
 
@@ -14,7 +15,7 @@ from .schemas import (
     CourseSchema, 
     RoomSchema, 
     SourceSchema,
-    NewTableSchema, # <--- Додали імпорт нової схеми
+    NewTableSchema, # <--- Якщо ви не використовуєте цю таблицю, закоментуйте або видаліть
     BaseSchema
 )
 
@@ -33,7 +34,7 @@ TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "rooms": RoomSchema,
     "sources": SourceSchema,
     
-    # 👇 Впишіть сюди реальну назву таблиці з PocketBase
+    # 👇 Впишіть сюди реальну назву таблиці з PocketBase (якщо використовуєте)
     "new_table_name": NewTableSchema, 
 }
 
@@ -94,7 +95,8 @@ def pb_get(
     table: str,
     request: Request,
     page: int = Query(1, ge=1),
-    perPage: int = Query(50, ge=1, le=500),
+    # ✅ ВИПРАВЛЕНО: Збільшено ліміт до 25000 для експорту великих даних
+    perPage: int = Query(50, ge=1, le=25000),
     sort: Optional[str] = Query(None),
     expand: Optional[str] = Query(None),
     filters: Optional[List[str]] = Query(None, alias="filters"), # Підтримка ?filters=...
@@ -129,6 +131,7 @@ def pb_get(
         meta = {}
 
         if full_list:
+            # Обережно з цим на великих таблицях, але ліміт 25000 дозволяє викачувати багато
             raw_items = client.collection(table).get_full_list(query_params=query_options)
             meta = {
                 "page": 1,
@@ -175,7 +178,7 @@ def pb_create(table: str, payload: CRUDPayload):
     schema_class = resolve_schema(table)
     
     try:
-        # При створенні запису передаємо дані як є (передбачається, що фронт шле правильні ключі для БД)
+        # При створенні запису передаємо дані як є
         record = client.collection(table).create(payload.data)
         
         # Повертаємо вже чистий об'єкт
@@ -238,8 +241,9 @@ async def pb_upload_file(
     schema_class = resolve_schema(table)
 
     try:
-        file_content = await file.read()
-        files_payload = { field: (file.filename, file_content) }
+        # ✅ ВИПРАВЛЕНО: Не читаємо весь файл у RAM (await file.read()).
+        # Передаємо file.file (це потік), щоб уникнути переповнення пам'яті.
+        files_payload = { field: (file.filename, file.file) }
 
         record = client.collection(table).update(record_id, {}, files=files_payload)
         
