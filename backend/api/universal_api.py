@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api", tags=["pb-universal"])
 KNOWN_TABLES: Dict[str, str] = {
     "user_staff": "user_staff",
     "reg": "reg",
+    "lc": "lc",
     # Додавайте сюди нові таблиці по мірі створення в PocketBase
     # "courses": "courses",
     # "leads": "leads",
