@@ -17,7 +17,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # Перевірка центру
+    # Перевірка центру (якщо логіка ще не готова)
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -25,46 +25,57 @@ def login_user(body: LoginRequest):
         )
 
     try:
-        # 1. Отримуємо дані від користувача
-        email = body.email.strip().lower()
-        password_input = body.password.strip()
-        
-        print(f"LOGIN attempt for: {email}")
+        # 1. Отримуємо вхідні дані "як є" (лише прибираємо пробіли по краях)
+        # Lower() для email - стандарт, бо пошта нечутлива до регістру
+        input_email = body.email.strip().lower()
+        # Пароль лишаємо чутливим до регістру!
+        input_password = body.password.strip()
+
+        print(f"LOGIN attempt for: {input_email}")
 
         # 2. Шукаємо користувача в базі
+        # Отримуємо повний список (можна оптимізувати через фільтр, але так надійніше для початку)
         records = client.collection("user_staff").get_full_list()
-        user = None
         
+        user = None
         for r in records:
-            # Отримуємо словник даних незалежно від типу об'єкта
-            data = r.model_dump() if hasattr(r, "model_dump") else (r.to_dict() if hasattr(r, "to_dict") else getattr(r, "__dict__", {}))
-            
+            # Універсальне отримання даних з об'єкта PocketBase
+            if hasattr(r, "model_dump"):
+                data = r.model_dump()
+            elif hasattr(r, "to_dict"):
+                data = r.to_dict()
+            else:
+                data = getattr(r, "__dict__", {})
+
+            # Порівнюємо email
             db_email = str(data.get("user_mail", "")).strip().lower()
-            if db_email == email:
+            if db_email == input_email:
                 user = data
                 break
 
         if not user:
-            print("User not found")
+            print(f"❌ User not found for email: {input_email}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         # 3. Отримуємо пароль з бази
-        password_db = str(user.get("user_pass", "")).strip()
+        db_password = str(user.get("user_pass", "")).strip()
 
-        # === ГОЛОВНЕ ВИПРАВЛЕННЯ ===
-        # Функція для заміни кириличної 'і' на латинську 'i'
-        def normalize_pass(text: str) -> str:
-            return text.replace("і", "i").replace("І", "I")
-
-        # Порівнюємо нормалізовані версії
-        if normalize_pass(password_db) != normalize_pass(password_input):
-            print(f"Password mismatch even after normalization.")
-            # Для глибокої відладки (можна видалити потім):
-            # print(f"DB codes: {[ord(c) for c in password_db]}")
-            # print(f"Input codes: {[ord(c) for c in password_input]}")
+        # 4. ПРЯМЕ ПОРІВНЯННЯ (Без нормалізацій)
+        if db_password != input_password:
+            # === БЛОК ВІДЛАДКИ (Тільки якщо пароль не підійшов) ===
+            print("❌ Password Mismatch!")
+            print(f"   DB Pass Length: {len(db_password)} | Input Pass Length: {len(input_password)}")
+            
+            # Виводимо коди символів, щоб бачити різницю (навіть для ієрогліфів)
+            # Це покаже, якщо літери візуально однакові, але різні технічно
+            print(f"   DB Codes:    {[ord(c) for c in db_password]}")
+            print(f"   Input Codes: {[ord(c) for c in input_password]}")
+            # ========================================================
+            
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        # ===========================
 
+        # Якщо дійшли сюди - все добре
+        print("✅ Login successful")
         return {
             "status": "ok",
             "collection": "user_staff",
