@@ -22,7 +22,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # Перевірка центру
+    # Перевірка центру (заготовка на майбутнє)
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -33,14 +33,13 @@ def login_user(body: LoginRequest):
         # 1. Отримуємо вхідні дані
         email = body.email.strip().lower()
         password_input = body.password.strip()
-        
-        print(f"LOGIN attempt for: {email}")
 
         # 2. Шукаємо користувача в базі
         records = client.collection("user_staff").get_full_list()
         user = None
         
         for r in records:
+            # Конвертація об'єкта PocketBase у словник
             if hasattr(r, "model_dump"):
                 data = r.model_dump()
             elif hasattr(r, "to_dict"):
@@ -54,29 +53,16 @@ def login_user(body: LoginRequest):
                 break
 
         if not user:
-            print(f"❌ User not found for email: {email}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # 3. Отримуємо пароль з бази
+        # 3. Отримуємо пароль з бази та очищаємо від HTML (Rich Text problem)
         raw_db_pass = str(user.get("user_pass", ""))
-
-        # === FIX: Очищення від HTML-тегів ===
-        # PocketBase Rich Text поле додає <p>...</p>, цей код їх видаляє
         password_db = re.sub(r'<[^>]+>', '', raw_db_pass).strip()
-
-        # Для відладки (можна видалити пізніше)
-        if raw_db_pass != password_db:
-             print(f"⚠️ HTML tags removed from DB password. Raw: '{raw_db_pass}' -> Clean: '{password_db}'")
 
         # 4. Порівняння
         if password_db != password_input:
-            print("❌ Password Mismatch even after cleaning!")
-            # Якщо знову не підійде - виведемо коди, щоб точно знати причину
-            print(f"   Clean DB Codes: {[ord(c) for c in password_db]}")
-            print(f"   Input Codes:    {[ord(c) for c in password_input]}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        print("✅ Login successful")
         return {
             "status": "ok",
             "collection": "user_staff",
@@ -87,6 +73,5 @@ def login_user(body: LoginRequest):
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        # У продакшн коді traceback краще писати в файл логів, а не в консоль
         raise HTTPException(status_code=500, detail=str(e))
