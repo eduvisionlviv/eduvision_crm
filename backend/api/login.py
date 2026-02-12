@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from backend.services.pocketbase import db
+import json
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -17,7 +18,6 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
-    # Перевірка центру (якщо логіка ще не готова)
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -25,21 +25,17 @@ def login_user(body: LoginRequest):
         )
 
     try:
-        # 1. Отримуємо вхідні дані "як є" (лише прибираємо пробіли по краях)
-        # Lower() для email - стандарт, бо пошта нечутлива до регістру
         input_email = body.email.strip().lower()
-        # Пароль лишаємо чутливим до регістру!
         input_password = body.password.strip()
 
-        print(f"LOGIN attempt for: {input_email}")
+        print(f"\n🕵️‍♂️ --- DEEP DEBUG START for: {input_email} ---")
 
-        # 2. Шукаємо користувача в базі
-        # Отримуємо повний список (можна оптимізувати через фільтр, але так надійніше для початку)
+        # Отримуємо всіх (можна оптимізувати, але для тесту надійніше так)
         records = client.collection("user_staff").get_full_list()
         
         user = None
         for r in records:
-            # Універсальне отримання даних з об'єкта PocketBase
+            # Конвертація в словник (dict)
             if hasattr(r, "model_dump"):
                 data = r.model_dump()
             elif hasattr(r, "to_dict"):
@@ -47,35 +43,45 @@ def login_user(body: LoginRequest):
             else:
                 data = getattr(r, "__dict__", {})
 
-            # Порівнюємо email
+            # Перевіряємо email
+            # Тут ми явно бачимо, з якого поля беремо пошту
             db_email = str(data.get("user_mail", "")).strip().lower()
+            
             if db_email == input_email:
                 user = data
+                print(f"✅ USER FOUND! ID: {data.get('id')}")
+                
+                # === 1. ВИВОДИМО СТРУКТУРУ БАЗИ ===
+                print(f"📂 RECORD KEYS (Columns available): {list(data.keys())}")
+                
+                # === 2. ЩО МИ ВИТЯГУЄМО ===
+                raw_pass = data.get("user_pass")
+                print(f"🧐 EXTRACTING field 'user_pass': '{raw_pass}' (Type: {type(raw_pass)})")
+                
+                # Перевіримо, чи немає випадково поля 'password'
+                if "password" in data:
+                    print(f"⚠️ FOUND field 'password': '{data.get('password')}' (Maybe we should use this?)")
+                
                 break
 
         if not user:
-            print(f"❌ User not found for email: {input_email}")
+            print(f"❌ User not found in DB loop.")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # 3. Отримуємо пароль з бази
+        # === 3. ПОРІВНЯННЯ ===
         db_password = str(user.get("user_pass", "")).strip()
-
-        # 4. ПРЯМЕ ПОРІВНЯННЯ (Без нормалізацій)
+        
         if db_password != input_password:
-            # === БЛОК ВІДЛАДКИ (Тільки якщо пароль не підійшов) ===
-            print("❌ Password Mismatch!")
-            print(f"   DB Pass Length: {len(db_password)} | Input Pass Length: {len(input_password)}")
+            print("❌ PASSWORD MISMATCH DETECTED")
+            print(f"   Input ('{input_password}') vs DB ('{db_password}')")
             
-            # Виводимо коди символів, щоб бачити різницю (навіть для ієрогліфів)
-            # Це покаже, якщо літери візуально однакові, але різні технічно
+            # ASCII коди (щоб побачити приховані символи)
             print(f"   DB Codes:    {[ord(c) for c in db_password]}")
             print(f"   Input Codes: {[ord(c) for c in input_password]}")
-            # ========================================================
             
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # Якщо дійшли сюди - все добре
-        print("✅ Login successful")
+        print("✅ LOGIN SUCCESS")
         return {
             "status": "ok",
             "collection": "user_staff",
