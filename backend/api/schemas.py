@@ -6,7 +6,7 @@ class BaseSchema(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,  # Дозволяє створювати об'єкт як через name, так і через аліас
         from_attributes=True,   # Дозволяє читати дані з об'єктів PocketBase
-        extra='ignore'          # Ігнорує зайві поля з бази, яких немає в схемі
+        extra='forbid'          # Ігнорує зайві поля з бази, яких немає в схемі
     )
 
 # --- 1. Схема для Навчальних Центрів (lc) ---
