@@ -50,7 +50,7 @@ interface StaffMember {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
   const { t } = useTranslation();
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user.role === 'admin' || user.role === 'owner'; // Розширена перевірка прав
   const [activeMainTab, setActiveMainTab] = useState<'profile' | 'admin'>(isAdmin ? 'admin' : 'profile');
   const [activeProfileSubTab, setActiveProfileSubTab] = useState<'info' | 'security'>('info');
   
@@ -76,13 +76,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
           if (res.ok) {
             const data = await res.json();
             // Мапимо дані з БД у наш інтерфейс
+            // Враховуємо нову схему Pydantic (clean names) та fallback на старі назви
             const mappedCenters = (data.items || []).map((item: any) => ({
               id: item.id,
-              name: item.lc_name,
-              address: item.lc_address || '',
-              phone: item.lc_phone || '',
-              currency: 'UAH', // Можна додати поле в БД, якщо треба
-              staffCount: 0 // Це треба буде рахувати окремим запитом або агрегацією
+              name: item.name || item.lc_name || 'Unnamed Center',
+              address: item.address || item.lc_address || '',
+              phone: item.phone || item.lc_phone || '',
+              currency: item.currency || 'UAH',
+              staffCount: item.staff_count || 0 
             }));
             setCenters(mappedCenters);
           }
@@ -101,18 +102,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
     if (selectedCenter && activeAdminSubTab === 'staff') {
       const fetchStaff = async () => {
         try {
-          // Фільтруємо співробітників по ID центру
-          // Припускаємо, що універсальний API підтримує ?filters=lc_id:eq:ID
-          // АБО, якщо це таблиця user_staff, вона може мати поле lc_id (або center_id)
-          // Перевірте точну назву поля в БД. Тут використовую 'lc_id' як приклад.
+          // Використовуємо універсальний фільтр: col:op:val
+          // Бекенд очікує lc_id або center_id в залежності від схеми
           const res = await fetch(`/api/pb/user_staff?filters=lc_id:eq:${selectedCenter.id}`); 
           if (res.ok) {
             const data = await res.json();
             const mappedStaff = (data.items || []).map((item: any) => ({
               id: item.id,
-              name: item.user_name || item.name,
-              email: item.user_mail || item.email,
-              role: item.user_role || item.role
+              // Новий бекенд повертає чисті імена (name, email), старий (user_name, user_mail)
+              name: item.name || item.user_name || 'Unknown',
+              email: item.email || item.user_mail || '',
+              role: item.role || item.user_role || 'staff'
             }));
             setStaff(mappedStaff);
           }
@@ -122,6 +122,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
       };
       fetchStaff();
     }
+    // Тут можна додати запити для courses, rooms, sources за аналогією
   }, [selectedCenter, activeAdminSubTab]);
 
   const EmptyState = ({ message, actionLabel, onAction, icon: Icon = Inbox }: any) => (
@@ -433,7 +434,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
                                              </div>
                                           </td>
                                           <td className="px-6 py-4">
-                                            <span className="px-2 py-1 bg-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase">{s.role}</span>
+                                             <span className="px-2 py-1 bg-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase">{s.role}</span>
                                           </td>
                                           <td className="px-6 py-4 text-right rounded-r-2xl">
                                              <button className="p-2 text-slate-300 hover:text-hd-navy"><Pencil size={16} /></button>
