@@ -6,7 +6,9 @@ class BaseSchema(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,  # Дозволяє створювати об'єкт як через name, так і через аліас
         from_attributes=True,   # Дозволяє читати дані з об'єктів PocketBase
-        extra='forbid'          # Ігнорує зайві поля з бази, яких немає в схемі
+        # ✅ ВИПРАВЛЕНО: 'forbid' змусить API видавати помилку, якщо в базі з'являться нові поля,
+        # яких немає в схемі. Це захистить від "зникнення" даних.
+        extra='forbid'          
     )
 
 # --- 1. Схема для Навчальних Центрів (lc) ---
@@ -20,6 +22,10 @@ class LCSchema(BaseSchema):
     # Поля для статистики
     staff_count: Optional[int] = Field(default=0)
     student_count: Optional[int] = Field(default=0)
+    
+    # Поля дати створення/оновлення, які завжди є в PocketBase
+    created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 2. Схема для Співробітників (user_staff) ---
 class StaffSchema(BaseSchema):
@@ -31,7 +37,9 @@ class StaffSchema(BaseSchema):
     center_id: Optional[str] = Field(default=None, alias="lc_id") 
     
     avatar: Optional[str] = Field(default="")
+    
     created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 3. Схема для Реєстрацій (reg) ---
 class RegSchema(BaseSchema):
@@ -41,7 +49,9 @@ class RegSchema(BaseSchema):
     phone: str
     center_id: str
     status: str = Field(default="pending")
+    
     created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 4. Курси (courses) ---
 class CourseSchema(BaseSchema):
@@ -49,6 +59,9 @@ class CourseSchema(BaseSchema):
     name: str
     description: Optional[str] = ""
     center_id: Optional[str] = Field(default=None, alias="lc_id")
+    
+    created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 5. Кімнати/Аудиторії (rooms) ---
 class RoomSchema(BaseSchema):
@@ -56,12 +69,19 @@ class RoomSchema(BaseSchema):
     name: str
     capacity: Optional[int] = 10
     center_id: Optional[str] = Field(default=None, alias="lc_id")
+    
+    created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 6. Джерела лідів (sources) ---
 class SourceSchema(BaseSchema):
     id: str
     n: str = Field(alias="name") 
     active: bool = True
+    center_id: Optional[str] = Field(default=None, alias="lc_id") # Припускаю, що джерела теж прив'язані до LC
+    
+    created: Optional[str] = Field(default="")
+    updated: Optional[str] = Field(default="")
 
 # --- 7. НОВА ТАБЛИЦЯ (ШАБЛОН) ---
 # 👇 ЗМІНИ ЦЕЙ КЛАС ПІД СВОЮ ТАБЛИЦЮ
@@ -71,5 +91,6 @@ class NewTableSchema(BaseSchema):
     name: str = Field(default="", alias="field_name_in_db") 
     status: Optional[str] = "active"
     description: Optional[str] = ""
+    
     created: Optional[str] = ""
     updated: Optional[str] = ""
