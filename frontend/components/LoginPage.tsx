@@ -58,7 +58,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [view, setView] = useState<ViewState>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [center, setCenter] = useState(''); // Stores center ID
+  const [center, setCenter] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [availableCenters, setAvailableCenters] = useState<{id: string, name: string}[]>([]);
@@ -73,18 +73,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   const LOGO_URL = "https://enguide.ua/image.php?width=300&height=168&crop&image=/s/public/upload/images/7b30/5c3c/e544/04d2/ed8b/256b/35b0/b74c.png";
 
-  // Fetch centers on component mount
   useEffect(() => {
     const fetchCenters = async () => {
       try {
         const response = await fetch('/api/pb/lc');
         if (response.ok) {
           const data = await response.json();
-          // Universal API with Pydantic Schema returns 'name', not 'lc_name'
           const items = data.items || [];
           const centers = items.map((item: any) => ({
             id: item.id,
-            name: item.name || item.lc_name || 'Unnamed Center' // Fallback to lc_name just in case, but prefer name
+            name: item.name || item.lc_name || 'Unnamed Center'
           }));
           setAvailableCenters(centers);
         }
@@ -113,12 +111,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       const result = await response.json();
 
       if (response.ok && result.status === 'ok') {
+        // ВИПРАВЛЕНО: Додано перевірку user_access для визначення ролі
+        const userRole = result.user.user_access || result.user.role || 'staff';
+        
         onLoginSuccess({
-          // Backend Schema mappings: user_name -> name, user_mail -> email, etc.
-          // Adjusting to accept both new cleaned format and potential raw format
-          name: result.user.name || result.user.user_name || 'User',
-          email: result.user.email || result.user.user_mail,
-          role: result.user.role || 'staff',
+          name: result.user.user_name || result.user.name || 'User',
+          email: result.user.user_mail || result.user.email,
+          role: userRole,
           token: result.token
         });
       } else {
@@ -136,8 +135,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     e.preventDefault();
     setIsLoading(true);
     
-    // Preparing data for the 'reg' table
-    // Ensure keys match what Universal API expects (usually Snake Case matching DB or Pydantic Alias)
     const requestData = {
       center_id: regData.centerId,
       admin_name: regData.adminName.trim(),
@@ -156,11 +153,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       if (response.ok) {
         alert(t('register.success'));
         setView('login');
-        // Reset form
         setRegData({ ...regData, adminName: '', email: '', phoneNumber: '' });
       } else {
-        const errorData = await response.json();
-        alert(`Registration failed: ${errorData.detail || "Unknown error"}`);
+        const err = await response.json();
+        alert(err.detail || "Registration failed. Please try again.");
       }
     } catch (error) {
        console.error(error);
@@ -172,7 +168,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   const handleForgot = (e: React.FormEvent) => {
     e.preventDefault();
-    // Placeholder for password reset logic
     setIsLoading(true);
     setTimeout(() => {
       setIsLoading(false);
