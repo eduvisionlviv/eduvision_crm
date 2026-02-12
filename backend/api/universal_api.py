@@ -1,91 +1,67 @@
 # backend/api/universal_api.py
-import re
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Type
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
 from pydantic import BaseModel
 
 from backend.services.pocketbase import db
 
+# Імпортуємо схеми з твого файлу backend/api/schemas.py
+# (крапка означає імпорт з поточної папки)
+from .schemas import LCSchema, StaffSchema, RegSchema, BaseSchema
+
 router = APIRouter(prefix="/api", tags=["pb-universal"])
 
 # ───────────────────────────────
-# 🔖 Реєстр відомих таблиць (Whitelist)
+# 🔖 Реєстр схем (Whitelist & Mapping)
 # ───────────────────────────────
-KNOWN_TABLES: Dict[str, str] = {
-    "user_staff": "user_staff",
-    "reg": "reg",
-    "lc": "lc",
-    # Додавайте сюди нові таблиці по мірі створення в PocketBase
-    # "courses": "courses",
-    # "leads": "leads",
+# Ключ = назва таблиці в URL та PocketBase
+# Значення = Pydantic клас для валідації та мапінгу
+TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
+    "lc": LCSchema,
+    "user_staff": StaffSchema,
+    "reg": RegSchema,
+    # Додавай нові таблиці сюди: "courses": CourseSchema
 }
 
 class CRUDPayload(BaseModel):
     data: Dict[str, Any]
 
-class PaginatedResponse(BaseModel):
-    items: List[Dict[str, Any]]
-    page: int
-    perPage: int
-    totalItems: int
-    totalPages: int
-
 # ───────────────────────────────
 # 🧩 Допоміжні функції
 # ───────────────────────────────
-def resolve_collection(table: str) -> str:
-    if table not in KNOWN_TABLES:
+
+def resolve_schema(table: str) -> Type[BaseSchema]:
+    """Перевіряє, чи дозволена таблиця, і повертає її схему."""
+    if table not in TABLE_SCHEMAS:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unknown table '{table}'. Додай її у KNOWN_TABLES в universal_api.py.",
+            status_code=403,
+            detail=f"Access to table '{table}' is restricted or schema not defined."
         )
-    return KNOWN_TABLES[table]
-
-def clean_rich_text(text: str) -> str:
-    """Видаляє HTML-теги з RichText полів."""
-    if text and isinstance(text, str) and "<" in text and ">" in text:
-        return re.sub(r'<[^>]+>', '', text).strip()
-    return text
-
-def sanitize_record(record: Any) -> Dict[str, Any]:
-    """Конвертує запис у словник і чистить сміття (HTML)."""
-    if hasattr(record, "model_dump"):
-        data = record.model_dump()
-    elif hasattr(record, "to_dict"):
-        data = record.to_dict()
-    elif isinstance(record, dict):
-        data = record
-    else:
-        data = getattr(record, "__dict__", {})
-
-    clean_data = {}
-    for key, val in data.items():
-        if isinstance(val, str):
-            clean_data[key] = clean_rich_text(val)
-        else:
-            clean_data[key] = val
-    return clean_data
+    return TABLE_SCHEMAS[table]
 
 def build_filter_expr(filters: List[str]) -> str:
     """
     Конвертує прості фільтри format=col:op:val у PocketBase синтаксис.
+    Підтримує: eq, neq, gt, lt, gte, lte, like.
     """
     exprs: List[str] = []
     for raw in filters:
-        parts = raw.split(":", 3)
-        if len(parts) != 3:
-            continue # Пропускаємо биті фільтри
-        col, op, val = parts
+        parts = raw.split(":", 2) # Розбиваємо максимум на 3 частини (col, op, val)
+        if len(parts) < 3:
+            continue
+        
+        col, op, val = parts[0], parts[1], parts[2]
 
-        # Обробка типів (числа та булеві не беремо в лапки)
+        # Базова санітизація значень
         if val.lower() in ["true", "false", "null"]:
             safe_val = val.lower()
         elif val.replace(".", "", 1).isdigit():
             safe_val = val
         else:
-            safe_val = f"'{val}'"
+            # Екранування одинарних лапок для безпеки PB
+            safe_val = f"'{val.replace("'", "\\'")}'"
 
         if op == "eq": exprs.append(f"{col} = {safe_val}")
         elif op == "neq": exprs.append(f"{col} != {safe_val}")
@@ -93,65 +69,87 @@ def build_filter_expr(filters: List[str]) -> str:
         elif op == "lt": exprs.append(f"{col} < {safe_val}")
         elif op == "gte": exprs.append(f"{col} >= {safe_val}")
         elif op == "lte": exprs.append(f"{col} <= {safe_val}")
-        elif op in ("like", "ilike"): exprs.append(f"{col} ~ '{val}'")
+        elif op in ("like", "ilike"): exprs.append(f"{col} ~ {safe_val}")
 
     return " && ".join(exprs)
 
 # ───────────────────────────────
-# 🔍 GET /api/pb/<table> - УНІВЕРСАЛЬНИЙ ПОШУК
+# 🔍 GET /api/pb/<table> - УНІВЕРСАЛЬНИЙ ПОШУК (З НОРМАЛІЗАЦІЄЮ)
 # ───────────────────────────────
 @router.get("/pb/{table}")
 def pb_get(
     table: str,
-    page: int = Query(1, ge=1, description="Номер сторінки"),
-    perPage: int = Query(50, ge=1, le=500, description="Кількість записів на сторінку"),
-    sort: Optional[str] = Query(None, description="Поле сортування (напр. '-created')"),
-    expand: Optional[str] = Query(None, description="Зв'язки (напр. 'user_id,course_id')"),
-    filters: Optional[List[str]] = Query(None, description="Прості фільтри col:op:val"),
-    filter_raw: Optional[str] = Query(None, description="Сирий SQL-фільтр PocketBase (напр. '(a=1 || b=2)')"),
-    full_list: bool = Query(False, description="Якщо true - ігнорує пагінацію і тягне ВСЕ (обережно!)")
+    request: Request,
+    page: int = Query(1, ge=1),
+    perPage: int = Query(50, ge=1, le=500),
+    sort: Optional[str] = Query(None),
+    expand: Optional[str] = Query(None),
+    filters: Optional[List[str]] = Query(None, alias="filters"), # Підтримка ?filters=...
+    filter_raw: Optional[str] = Query(None, alias="filter"),     # Підтримка ?filter=... (стандарт PB)
+    full_list: bool = Query(False)
 ):
     client = db.get_client()
     if not client:
-        raise HTTPException(status_code=500, detail="PocketBase unavailable")
+        raise HTTPException(status_code=503, detail="PocketBase service unavailable")
 
-    collection = resolve_collection(table)
+    # 1. Отримуємо схему (і перевіряємо доступ)
+    schema_class = resolve_schema(table)
 
     try:
-        # 1. Формуємо фільтр
-        # Пріоритет: filter_raw > filters
+        # 2. Формуємо параметри запиту до PB
+        query_options = {}
+        if sort: query_options["sort"] = sort
+        if expand: query_options["expand"] = expand
+        
+        # Пріоритет: filter (raw SQL-like) > filters (simple helper)
         active_filter = ""
         if filter_raw:
             active_filter = filter_raw
         elif filters:
             active_filter = build_filter_expr(filters)
+        
+        if active_filter:
+            query_options["filter"] = active_filter
 
-        # 2. Опції запиту
-        query_options = {}
-        if sort: query_options["sort"] = sort
-        if expand: query_options["expand"] = expand
-        if active_filter: query_options["filter"] = active_filter
+        # 3. Виконуємо запит до бази
+        raw_items = []
+        meta = {}
 
-        # 3. Виконання запиту
         if full_list:
-            # Тягнемо все (стара логіка)
-            records = client.collection(collection).get_full_list(query_params=query_options)
-            return [sanitize_record(r) for r in records]
+            raw_items = client.collection(table).get_full_list(query_params=query_options)
+            meta = {
+                "page": 1,
+                "perPage": len(raw_items),
+                "totalItems": len(raw_items),
+                "totalPages": 1
+            }
         else:
-            # Пагінація (нова логіка)
-            result = client.collection(collection).get_list(page, perPage, query_params=query_options)
-            
-            return {
-                "items": [sanitize_record(r) for r in result.items],
+            result = client.collection(table).get_list(page, perPage, query_params=query_options)
+            raw_items = result.items
+            meta = {
                 "page": result.page,
                 "perPage": result.per_page,
                 "totalItems": result.total_items,
                 "totalPages": result.total_pages
             }
 
+        # 4. 🔥 НОРМАЛІЗАЦІЯ ДАНИХ ЧЕРЕЗ PYDANTIC 🔥
+        # Це перетворить lc_name -> name, видалить зайві поля і перевірить типи
+        clean_items = []
+        for item in raw_items:
+            # Pydantic читає з атрибутів об'єкта PB (завдяки from_attributes=True)
+            validated_obj = schema_class.model_validate(item)
+            # Вивантажуємо в dict, використовуючи "чисті" імена (by_alias=False)
+            clean_items.append(validated_obj.model_dump(by_alias=False))
+
+        return {
+            **meta,
+            "items": clean_items
+        }
+
     except Exception as e:
-        # Логування можна додати тут
-        raise HTTPException(status_code=500, detail=f"PB Error: {str(e)}")
+        print(f"PB API Error ({table}): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 # ───────────────────────────────
@@ -160,14 +158,22 @@ def pb_get(
 @router.post("/pb/{table}")
 def pb_create(table: str, payload: CRUDPayload):
     client = db.get_client()
-    if not client: raise HTTPException(status_code=500)
+    if not client: raise HTTPException(status_code=503)
     
-    collection = resolve_collection(table)
+    schema_class = resolve_schema(table)
+    
     try:
-        record = client.collection(collection).create(payload.data)
-        return sanitize_record(record)
+        # Примітка: При запису ми поки що довіряємо, що фронт шле правильні назви полів (як у базі),
+        # або можна додати логіку зворотного мапінгу (reverse mapping), якщо це критично.
+        # Зараз просто проксіюємо дані в базу.
+        record = client.collection(table).create(payload.data)
+        
+        # Але повертаємо ми вже чистий об'єкт!
+        validated = schema_class.model_validate(record)
+        return validated.model_dump(by_alias=False)
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ───────────────────────────────
@@ -176,14 +182,18 @@ def pb_create(table: str, payload: CRUDPayload):
 @router.patch("/pb/{table}/{record_id}")
 def pb_update(table: str, record_id: str, payload: CRUDPayload):
     client = db.get_client()
-    if not client: raise HTTPException(status_code=500)
+    if not client: raise HTTPException(status_code=503)
 
-    collection = resolve_collection(table)
+    schema_class = resolve_schema(table)
+    
     try:
-        record = client.collection(collection).update(record_id, payload.data)
-        return sanitize_record(record)
+        record = client.collection(table).update(record_id, payload.data)
+        
+        # Повертаємо чистий об'єкт
+        validated = schema_class.model_validate(record)
+        return validated.model_dump(by_alias=False)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ───────────────────────────────
@@ -192,49 +202,41 @@ def pb_update(table: str, record_id: str, payload: CRUDPayload):
 @router.delete("/pb/{table}/{record_id}")
 def pb_delete(table: str, record_id: str):
     client = db.get_client()
-    if not client: raise HTTPException(status_code=500)
+    if not client: raise HTTPException(status_code=503)
 
-    collection = resolve_collection(table)
+    # Перевірка на існування схеми (як міра безпеки доступу)
+    resolve_schema(table)
+
     try:
-        client.collection(collection).delete(record_id)
-        return {"status": "ok"}
+        client.collection(table).delete(record_id)
+        return {"status": "ok", "id": record_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ───────────────────────────────
-# 📂 POST /api/pb/<table>/<id>/file - ЗАВАНТАЖЕННЯ ФАЙЛУ
+# 📂 FILE UPLOAD
 # ───────────────────────────────
 @router.post("/pb/{table}/{record_id}/file")
 async def pb_upload_file(
     table: str, 
     record_id: str, 
-    field: str = Form(..., description="Назва поля в базі (напр. 'avatar')"),
+    field: str = Form(...),
     file: UploadFile = File(...)
 ):
-    """
-    Універсальний завантажувач файлів.
-    1. Створіть запис через звичайний POST.
-    2. Отримайте ID.
-    3. Викличте цей метод, щоб додати файл у конкретне поле.
-    """
     client = db.get_client()
-    if not client: raise HTTPException(status_code=500)
+    if not client: raise HTTPException(status_code=503)
 
-    collection = resolve_collection(table)
+    schema_class = resolve_schema(table)
 
     try:
-        # Читаємо файл у байти
         file_content = await file.read()
-        
-        # PocketBase очікує (filename, content)
-        files_payload = {
-            field: (file.filename, file_content)
-        }
+        files_payload = { field: (file.filename, file_content) }
 
-        # Оновлюємо запис, додаючи файл
-        record = client.collection(collection).update(record_id, {}, files=files_payload)
-        return sanitize_record(record)
+        record = client.collection(table).update(record_id, {}, files=files_payload)
+        
+        validated = schema_class.model_validate(record)
+        return validated.model_dump(by_alias=False)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
