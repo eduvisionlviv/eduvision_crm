@@ -1,15 +1,20 @@
 # backend/api/login.py
+import re
 from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
 from backend.services.pocketbase import db
 
 router = APIRouter(prefix="/api", tags=["auth"])
+
 
 class LoginRequest(BaseModel):
     center: Optional[str] = None
     email: str
     password: str
+
 
 @router.post("/login")
 def login_user(body: LoginRequest):
@@ -17,6 +22,7 @@ def login_user(body: LoginRequest):
     if not client:
         raise HTTPException(status_code=500, detail="PocketBase client not available")
 
+    # Перевірка центру
     if body.center and body.center != "Оберіть ваш центр...":
         raise HTTPException(
             status_code=400,
@@ -30,7 +36,7 @@ def login_user(body: LoginRequest):
         
         print(f"LOGIN attempt for: {email}")
 
-        # 2. Шукаємо користувача
+        # 2. Шукаємо користувача в базі
         records = client.collection("user_staff").get_full_list()
         user = None
         
@@ -52,18 +58,22 @@ def login_user(body: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         # 3. Отримуємо пароль з бази
-        password_db = str(user.get("user_pass", "")).strip()
+        raw_db_pass = str(user.get("user_pass", ""))
 
-        # 4. Порівняння і ДІАГНОСТИКА
+        # === FIX: Очищення від HTML-тегів ===
+        # PocketBase Rich Text поле додає <p>...</p>, цей код їх видаляє
+        password_db = re.sub(r'<[^>]+>', '', raw_db_pass).strip()
+
+        # Для відладки (можна видалити пізніше)
+        if raw_db_pass != password_db:
+             print(f"⚠️ HTML tags removed from DB password. Raw: '{raw_db_pass}' -> Clean: '{password_db}'")
+
+        # 4. Порівняння
         if password_db != password_input:
-            print("❌ Password Mismatch!")
-            print(f"   DB Pass:    '{password_db}'") # Обережно, покаже пароль у логах!
-            print(f"   Input Pass: '{password_input}'")
-            
-            # ОСЬ ЦЕ НАМ ПОТРІБНО:
-            print(f"   DB Codes:    {[ord(c) for c in password_db]}")
-            print(f"   Input Codes: {[ord(c) for c in password_input]}")
-            
+            print("❌ Password Mismatch even after cleaning!")
+            # Якщо знову не підійде - виведемо коди, щоб точно знати причину
+            print(f"   Clean DB Codes: {[ord(c) for c in password_db]}")
+            print(f"   Input Codes:    {[ord(c) for c in password_input]}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
         print("✅ Login successful")
