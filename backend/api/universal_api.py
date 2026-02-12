@@ -1,4 +1,3 @@
-# backend/api/universal_api.py
 import json
 from typing import Any, Dict, List, Optional, Type
 
@@ -15,6 +14,7 @@ from .schemas import (
     CourseSchema, 
     RoomSchema, 
     SourceSchema,
+    NewTableSchema, # <--- Додали імпорт нової схеми
     BaseSchema
 )
 
@@ -32,6 +32,9 @@ TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "courses": CourseSchema,
     "rooms": RoomSchema,
     "sources": SourceSchema,
+    
+    # 👇 Впишіть сюди реальну назву таблиці з PocketBase
+    "new_table_name": NewTableSchema, 
 }
 
 class CRUDPayload(BaseModel):
@@ -173,7 +176,6 @@ def pb_create(table: str, payload: CRUDPayload):
     
     try:
         # При створенні запису передаємо дані як є (передбачається, що фронт шле правильні ключі для БД)
-        # Або можна додати логіку зворотного мапінгу, якщо фронт шле API-ключі.
         record = client.collection(table).create(payload.data)
         
         # Повертаємо вже чистий об'єкт
