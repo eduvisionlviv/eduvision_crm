@@ -1,30 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  User, 
-  Lock, 
-  ShieldCheck, 
-  Building, 
-  Users, 
-  BookOpen, 
-  DoorOpen, 
-  Share2, 
-  Plus, 
-  Camera, 
-  Mail, 
-  Phone,
-  Pencil,
-  Trash2,
-  Globe,
-  Instagram,
-  Facebook,
-  MessageCircle,
-  ChevronLeft,
-  MapPin,
-  Coins,
-  ArrowRight,
-  ExternalLink,
-  Inbox,
-  Loader2
+  User, Lock, ShieldCheck, Building, Users, BookOpen, DoorOpen, Share2, 
+  Plus, Camera, Mail, Phone, Pencil, Trash2, MapPin, Coins, ArrowRight, 
+  ChevronLeft, Inbox, Loader2 
 } from 'lucide-react';
 import { useTranslation } from '../contexts/LanguageContext';
 
@@ -50,7 +28,9 @@ interface StaffMember {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
   const { t } = useTranslation();
-  const isAdmin = user.role === 'admin' || user.role === 'owner'; // Розширена перевірка прав
+  // Перевірка прав: admin або owner
+  const isAdmin = user.role === 'admin' || user.role === 'owner';
+  
   const [activeMainTab, setActiveMainTab] = useState<'profile' | 'admin'>(isAdmin ? 'admin' : 'profile');
   const [activeProfileSubTab, setActiveProfileSubTab] = useState<'info' | 'security'>('info');
   
@@ -66,7 +46,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
   const [rooms, setRooms] = useState<any[]>([]);
   const [sources, setSources] = useState<any[]>([]);
 
-  // 1. Fetch Centers when Admin tab is active
+  // 1. Завантаження списку центрів
   useEffect(() => {
     if (activeMainTab === 'admin') {
       const fetchCenters = async () => {
@@ -75,15 +55,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
           const res = await fetch('/api/pb/lc');
           if (res.ok) {
             const data = await res.json();
-            // Мапимо дані з БД у наш інтерфейс
-            // Враховуємо нову схему Pydantic (clean names) та fallback на старі назви
             const mappedCenters = (data.items || []).map((item: any) => ({
               id: item.id,
-              name: item.name || item.lc_name || 'Unnamed Center',
-              address: item.address || item.lc_address || '',
-              phone: item.phone || item.lc_phone || '',
-              currency: item.currency || 'UAH',
-              staffCount: item.staff_count || 0 
+              name: item.name, // Бекенд LCSchema вже перетворив lc_name на name
+              address: item.address,
+              phone: item.phone,
+              currency: item.currency,
+              staffCount: item.staff_count
             }));
             setCenters(mappedCenters);
           }
@@ -97,32 +75,63 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
     }
   }, [activeMainTab]);
 
-  // 2. Fetch Staff/Data when a Center is selected
+  // 2. Завантаження даних при виборі центру і вкладки
   useEffect(() => {
-    if (selectedCenter && activeAdminSubTab === 'staff') {
-      const fetchStaff = async () => {
-        try {
-          // Використовуємо універсальний фільтр: col:op:val
-          // Бекенд очікує lc_id або center_id в залежності від схеми
-          const res = await fetch(`/api/pb/user_staff?filters=lc_id:eq:${selectedCenter.id}`); 
-          if (res.ok) {
-            const data = await res.json();
-            const mappedStaff = (data.items || []).map((item: any) => ({
-              id: item.id,
-              // Новий бекенд повертає чисті імена (name, email), старий (user_name, user_mail)
-              name: item.name || item.user_name || 'Unknown',
-              email: item.email || item.user_mail || '',
-              role: item.role || item.user_role || 'staff'
-            }));
-            setStaff(mappedStaff);
-          }
-        } catch (error) {
-          console.error("Error fetching staff:", error);
+    if (!selectedCenter) return;
+
+    const fetchData = async () => {
+      try {
+        let url = '';
+        // Формуємо URL залежно від вкладки
+        switch (activeAdminSubTab) {
+            case 'staff':
+                // Фільтр: lc_id дорівнює ID центру
+                url = `/api/pb/user_staff?filters=lc_id:eq:${selectedCenter.id}`;
+                break;
+            case 'courses':
+                url = `/api/pb/courses?filters=lc_id:eq:${selectedCenter.id}`;
+                break;
+            case 'rooms':
+                url = `/api/pb/rooms?filters=lc_id:eq:${selectedCenter.id}`;
+                break;
+            case 'sources':
+                // Джерела можуть бути глобальними (без фільтра по центру)
+                // Якщо у вас джерела прив'язані до центру, додайте ?filters=...
+                url = `/api/pb/sources`; 
+                break;
+            default:
+                return;
         }
-      };
-      fetchStaff();
+
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          const items = data.items || [];
+
+          // Розкладаємо дані у відповідні стейти
+          if (activeAdminSubTab === 'staff') {
+             setStaff(items.map((item: any) => ({
+                id: item.id,
+                name: item.name,
+                email: item.email,
+                role: item.role // StaffSchema мапить user_access -> role
+             })));
+          } else if (activeAdminSubTab === 'courses') {
+             setCourses(items); // CourseSchema мапить поля автоматично
+          } else if (activeAdminSubTab === 'rooms') {
+             setRooms(items); // RoomSchema
+          } else if (activeAdminSubTab === 'sources') {
+             setSources(items); // SourceSchema: name -> n
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching ${activeAdminSubTab}:`, error);
+      }
+    };
+
+    if (activeAdminSubTab !== 'info') {
+        fetchData();
     }
-    // Тут можна додати запити для courses, rooms, sources за аналогією
   }, [selectedCenter, activeAdminSubTab]);
 
   const EmptyState = ({ message, actionLabel, onAction, icon: Icon = Inbox }: any) => (
