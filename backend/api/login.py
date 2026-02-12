@@ -3,7 +3,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from backend.services.pocketbase import db
-import json
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -25,17 +24,17 @@ def login_user(body: LoginRequest):
         )
 
     try:
-        input_email = body.email.strip().lower()
-        input_password = body.password.strip()
-
-        print(f"\n🕵️‍♂️ --- DEEP DEBUG START for: {input_email} ---")
-
-        # Отримуємо всіх (можна оптимізувати, але для тесту надійніше так)
-        records = client.collection("user_staff").get_full_list()
+        # 1. Отримуємо вхідні дані
+        email = body.email.strip().lower()
+        password_input = body.password.strip()
         
+        print(f"LOGIN attempt for: {email}")
+
+        # 2. Шукаємо користувача
+        records = client.collection("user_staff").get_full_list()
         user = None
+        
         for r in records:
-            # Конвертація в словник (dict)
             if hasattr(r, "model_dump"):
                 data = r.model_dump()
             elif hasattr(r, "to_dict"):
@@ -43,45 +42,31 @@ def login_user(body: LoginRequest):
             else:
                 data = getattr(r, "__dict__", {})
 
-            # Перевіряємо email
-            # Тут ми явно бачимо, з якого поля беремо пошту
             db_email = str(data.get("user_mail", "")).strip().lower()
-            
-            if db_email == input_email:
+            if db_email == email:
                 user = data
-                print(f"✅ USER FOUND! ID: {data.get('id')}")
-                
-                # === 1. ВИВОДИМО СТРУКТУРУ БАЗИ ===
-                print(f"📂 RECORD KEYS (Columns available): {list(data.keys())}")
-                
-                # === 2. ЩО МИ ВИТЯГУЄМО ===
-                raw_pass = data.get("user_pass")
-                print(f"🧐 EXTRACTING field 'user_pass': '{raw_pass}' (Type: {type(raw_pass)})")
-                
-                # Перевіримо, чи немає випадково поля 'password'
-                if "password" in data:
-                    print(f"⚠️ FOUND field 'password': '{data.get('password')}' (Maybe we should use this?)")
-                
                 break
 
         if not user:
-            print(f"❌ User not found in DB loop.")
+            print(f"❌ User not found for email: {email}")
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # === 3. ПОРІВНЯННЯ ===
-        db_password = str(user.get("user_pass", "")).strip()
-        
-        if db_password != input_password:
-            print("❌ PASSWORD MISMATCH DETECTED")
-            print(f"   Input ('{input_password}') vs DB ('{db_password}')")
+        # 3. Отримуємо пароль з бази
+        password_db = str(user.get("user_pass", "")).strip()
+
+        # 4. Порівняння і ДІАГНОСТИКА
+        if password_db != password_input:
+            print("❌ Password Mismatch!")
+            print(f"   DB Pass:    '{password_db}'") # Обережно, покаже пароль у логах!
+            print(f"   Input Pass: '{password_input}'")
             
-            # ASCII коди (щоб побачити приховані символи)
-            print(f"   DB Codes:    {[ord(c) for c in db_password]}")
-            print(f"   Input Codes: {[ord(c) for c in input_password]}")
+            # ОСЬ ЦЕ НАМ ПОТРІБНО:
+            print(f"   DB Codes:    {[ord(c) for c in password_db]}")
+            print(f"   Input Codes: {[ord(c) for c in password_input]}")
             
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        print("✅ LOGIN SUCCESS")
+        print("✅ Login successful")
         return {
             "status": "ok",
             "collection": "user_staff",
