@@ -18,7 +18,7 @@ class LCSchema(BaseSchema):
     # Якщо валюти немає в базі, ставимо UAH за замовчуванням
     currency: Optional[str] = Field(default="UAH") 
     
-    # Поля для статистики (можна розширювати)
+    # Поля для статистики
     staff_count: Optional[int] = Field(default=0)
     student_count: Optional[int] = Field(default=0)
 
@@ -27,10 +27,10 @@ class StaffSchema(BaseSchema):
     id: str
     name: str = Field(alias="user_name")
     email: str = Field(alias="user_mail")
-    role: str = Field(alias="user_role")
+    # ВИПРАВЛЕНО: user_role -> user_access
+    role: str = Field(alias="user_access") 
     
-    # Прив'язка до центру (важливо для фільтрації)
-    # Якщо в базі поле називається інакше (напр. center_id), зміни alias тут
+    # Прив'язка до центру
     center_id: Optional[str] = Field(default=None, alias="lc_id") 
     
     avatar: Optional[str] = Field(default="")
@@ -46,9 +46,7 @@ class RegSchema(BaseSchema):
     status: str = Field(default="pending")
     created: Optional[str] = Field(default="")
 
-# --- 4. Додаткові схеми (Заготовки на майбутнє) ---
-# Можна додати схеми для Courses, Rooms, Students тут, коли створиш таблиці.
-
+# --- 4. Додаткові схеми ---
 class CourseSchema(BaseSchema):
     id: str
     name: str
