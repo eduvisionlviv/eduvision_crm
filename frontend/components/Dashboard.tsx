@@ -9,8 +9,7 @@ import {
   Menu, 
   X,
   User,
-  ChevronRight,
-  Plus
+  ChevronRight
 } from 'lucide-react';
 import { useTranslation } from '../contexts/LanguageContext';
 import { SettingsView } from './SettingsView';
@@ -48,6 +47,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const renderContent = () => {
     switch (activeTab) {
       case 'settings':
+        // Передаємо користувача далі, щоб налаштування знали, хто адмін, і мали токен
         return <SettingsView user={user} />;
       case 'dashboard':
       default:
@@ -183,7 +183,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         
         {/* Watermark Branding */}
         <div className="absolute bottom-[-5%] right-[-5%] w-[40%] max-w-[500px] opacity-[0.03] pointer-events-none select-none z-0">
-           <img src={LOGO_URL} alt="" className="w-full h-auto grayscale" />
+            <img src={LOGO_URL} alt="" className="w-full h-auto grayscale" />
         </div>
 
         {/* Header */}
