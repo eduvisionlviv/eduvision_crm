@@ -97,7 +97,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user }) => {
             case 'sources':
                 // Джерела можуть бути глобальними (без фільтра по центру)
                 // Якщо у вас джерела прив'язані до центру, додайте ?filters=...
-                url = `/api/pb/sources`; 
+                url = `/api/pb/sources?filters=lc_id:eq:${selectedCenter.id}`;
                 break;
             default:
                 return;
