@@ -15,7 +15,12 @@ import { useTranslation } from '../contexts/LanguageContext';
 import { SettingsView } from './SettingsView';
 
 interface DashboardProps {
-  user: any;
+  user: {
+    name: string;
+    email: string;
+    role: string;
+    token?: string;
+  };
   onLogout: () => void;
 }
 
@@ -47,21 +52,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const renderContent = () => {
     switch (activeTab) {
       case 'settings':
-        // Передаємо користувача далі, щоб налаштування знали, хто адмін, і мали токен
         return <SettingsView user={user} />;
+      case 'reports':
+        return (
+            <div className="flex flex-col items-center justify-center h-[60vh] text-center p-8 bg-white rounded-[2.5rem] border border-slate-100 shadow-sm">
+                <div className="w-20 h-20 bg-hd-gold/10 rounded-full flex items-center justify-center text-hd-gold mb-6">
+                    <BarChart3 size={40} />
+                </div>
+                <h2 className="text-2xl font-black text-hd-navy uppercase tracking-tight mb-2">{t('nav.reports')}</h2>
+                <p className="text-slate-500 font-medium max-w-md">Analytics module is under development.</p>
+            </div>
+        );
       case 'dashboard':
       default:
         return (
           <div className="space-y-12">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-10">
                {[
-                 { title: 'Студенти', icon: User, color: 'bg-hd-green' },
-                 { title: 'Звіти', icon: BarChart3, color: 'bg-hd-gold' },
-                 { title: 'Налаштування', icon: Settings, color: 'bg-hd-navy', tab: 'settings' }
+                 { title: t('nav.students') || 'Students', icon: User, color: 'bg-hd-green', tab: 'students' }, // Placeholder tab
+                 { title: t('nav.reports'), icon: BarChart3, color: 'bg-hd-gold', tab: 'reports' },
+                 { title: t('nav.settings'), icon: Settings, color: 'bg-hd-navy', tab: 'settings' }
                ].map((card, i) => (
                 <div 
                   key={i} 
-                  onClick={() => card.tab && setActiveTab(card.tab)}
+                  onClick={() => card.tab && setActiveTab(card.tab === 'students' ? 'dashboard' : card.tab)} // Prevent navigation to non-existent tabs for now
                   className="group relative aspect-video bg-white rounded-[2.5rem] border border-slate-100 p-8 flex flex-col justify-between shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 overflow-hidden cursor-pointer"
                 >
                   <div className={`w-14 h-14 ${card.color} rounded-2xl flex items-center justify-center text-white shadow-xl transform group-hover:rotate-6 transition-transform duration-500`}>
@@ -82,13 +96,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     <img src={LOGO_URL} alt="HD" className="w-20 grayscale opacity-40" />
                   </div>
                </div>
-               <h2 className="text-2xl font-black text-hd-navy uppercase tracking-tight">Робоча область готова</h2>
-               <p className="text-slate-500 mt-4 max-w-md font-bold text-xs uppercase tracking-widest">Будь ласка, перейдіть до налаштувань, щоб розпочати роботу та додати ваш перший центр.</p>
+               <h2 className="text-2xl font-black text-hd-navy uppercase tracking-tight">System Ready</h2>
+               <p className="text-slate-500 mt-4 max-w-md font-bold text-xs uppercase tracking-widest">
+                   Please proceed to settings to configure your center.
+               </p>
                <button 
                 onClick={() => setActiveTab('settings')}
                 className="mt-8 flex items-center gap-2 bg-hd-navy text-hd-gold px-8 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-hd-navy/20 hover:scale-105 transition-all"
                >
-                 Налаштувати систему
+                 {t('nav.settings')}
                </button>
             </div>
           </div>
@@ -200,7 +216,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               <Search className="absolute left-4 text-slate-400" size={18} />
               <input 
                 type="text" 
-                placeholder="Швидкий пошук..." 
+                placeholder="Global Search..." 
                 className="pl-12 pr-6 py-2.5 bg-slate-50 border border-transparent rounded-2xl text-sm w-48 lg:w-80 focus:bg-white focus:ring-4 focus:ring-hd-gold/10 focus:border-hd-gold/30 outline-none transition-all"
               />
             </div>
@@ -258,7 +274,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               </h1>
               {activeTab === 'dashboard' && (
                 <p className="text-slate-500 text-sm md:text-base mt-2 font-medium max-w-2xl">
-                  {t('dashboard.welcome')} {user.name}. Система Helen Doron English готова до роботи.
+                  {t('dashboard.welcome')} {user.name}. 
                 </p>
               )}
             </div>
