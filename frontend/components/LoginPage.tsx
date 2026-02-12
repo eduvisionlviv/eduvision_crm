@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Loader2, Building2, UserPlus, ArrowLeft, User, Phone, ChevronDown, Globe } from 'lucide-react';
 import { useTranslation } from '../contexts/LanguageContext';
 
@@ -58,9 +58,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [view, setView] = useState<ViewState>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [center, setCenter] = useState('');
+  const [center, setCenter] = useState(''); // Stores center ID
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [availableCenters, setAvailableCenters] = useState<{id: string, name: string}[]>([]);
 
   const [regData, setRegData] = useState({
     centerId: '',
@@ -72,54 +73,108 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   const LOGO_URL = "https://enguide.ua/image.php?width=300&height=168&crop&image=/s/public/upload/images/7b30/5c3c/e544/04d2/ed8b/256b/35b0/b74c.png";
 
-  const availableCenters: {id: string, name: string}[] = [];
+  // Fetch centers on component mount
+  useEffect(() => {
+    const fetchCenters = async () => {
+      try {
+        const response = await fetch('/api/pb/lc');
+        if (response.ok) {
+          const data = await response.json();
+          // Assuming API returns { items: [...] } structure standard to PocketBase wrapper
+          const items = data.items || [];
+          const centers = items.map((item: any) => ({
+            id: item.id,
+            name: item.lc_name // Mapping 'lc_name' from DB
+          }));
+          setAvailableCenters(centers);
+        }
+      } catch (error) {
+        console.error("Failed to load centers:", error);
+      }
+    };
+    fetchCenters();
+  }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     
-    // Normalization
-    const normalizedEmail = email.trim().toLowerCase();
-    
-    // SIMULATED API CALL
-    setTimeout(() => {
-      setIsLoading(false);
-      // Here you would normally receive data from your backend
-      onLoginSuccess({
-        name: 'Olena Administrativna',
-        email: normalizedEmail,
-        role: 'admin'
+    try {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          center: center,
+          email: email.trim().toLowerCase(),
+          password: password
+        }),
       });
-    }, 1500);
+
+      const result = await response.json();
+
+      if (response.ok && result.status === 'ok') {
+        onLoginSuccess({
+          name: result.user.user_name || 'User',
+          email: result.user.user_mail,
+          role: result.user.role || 'staff',
+          token: result.token
+        });
+      } else {
+        alert(result.detail || "Login failed");
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      alert("Connection error. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     
-    const normalizedData = {
-      centerId: regData.centerId,
-      adminName: regData.adminName.trim(),
+    // Preparing data for the 'reg' table
+    const requestData = {
+      center_id: regData.centerId,
+      admin_name: regData.adminName.trim(),
       email: regData.email.trim().toLowerCase(),
-      fullPhone: `${regData.phonePrefix}${regData.phoneNumber.replace(/\D/g, '')}`
+      phone: `${regData.phonePrefix}${regData.phoneNumber.replace(/\D/g, '')}`,
+      status: 'pending'
     };
 
-    setTimeout(() => {
+    try {
+      const response = await fetch('/api/pb/reg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+      });
+
+      if (response.ok) {
+        alert(t('register.success'));
+        setView('login');
+        // Reset form
+        setRegData({ ...regData, adminName: '', email: '', phoneNumber: '' });
+      } else {
+        alert("Registration failed. Please try again.");
+      }
+    } catch (error) {
+       console.error(error);
+       alert("Network error during registration.");
+    } finally {
       setIsLoading(false);
-      alert(t('register.success'));
-      setView('login');
-    }, 1500);
+    }
   };
 
   const handleForgot = (e: React.FormEvent) => {
     e.preventDefault();
+    // Placeholder for password reset logic
     setIsLoading(true);
-    const normalizedEmail = email.trim().toLowerCase();
     setTimeout(() => {
       setIsLoading(false);
-      alert("Instructions sent to " + normalizedEmail);
+      alert("Functionality coming soon. Please contact administrator.");
       setView('login');
-    }, 1500);
+    }, 1000);
   };
 
   const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
@@ -172,7 +227,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-400 group-focus-within/input:text-hd-gold transition-colors"><Building2 size={18} /></div>
                           <select value={center} onChange={(e) => setCenter(e.target.value)} className="block w-full pl-11 pr-10 py-3.5 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm">
                               <option value="" className="bg-hd-navy text-slate-400">{t('login.centerPlaceholder')}</option>
-                              <option value="test" className="bg-hd-navy text-white">Kyiv Central Center</option>
+                              {availableCenters.map(c => (
+                                <option key={c.id} value={c.id} className="bg-hd-navy text-white">{c.name}</option>
+                              ))}
+                              {availableCenters.length === 0 && <option disabled className="bg-hd-navy text-slate-500">Loading centers...</option>}
                           </select>
                           <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400"><ChevronDown size={16} /></div>
                       </div>
@@ -226,7 +284,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                           <select required value={regData.centerId} onChange={(e) => setRegData({...regData, centerId: e.target.value})} className="block w-full pl-11 pr-10 py-3 input-glass rounded-xl text-white appearance-none cursor-pointer focus:ring-2 focus:ring-hd-gold/50 transition-all text-sm">
                               <option value="" disabled className="bg-hd-navy text-slate-400">{t('login.centerPlaceholder')}</option>
                               {availableCenters.map(c => (<option key={c.id} value={c.id} className="bg-hd-navy text-white">{c.name}</option>))}
-                              {availableCenters.length === 0 && (<option disabled className="bg-hd-navy text-slate-500 italic">No centers available yet</option>)}
+                              {availableCenters.length === 0 && (<option disabled className="bg-hd-navy text-slate-500 italic">No centers available</option>)}
                           </select>
                           <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400"><ChevronDown size={16} /></div>
                       </div>
