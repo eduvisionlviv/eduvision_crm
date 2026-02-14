@@ -1,10 +1,11 @@
+# Backend Dependencies - Appwrite Edition
+
 fastapi
 uvicorn[standard]
 httpx
-bcrypt
-redis[hiredis]
-Pydantic
-passlib[bcrypt]
-pocketbase
+pydantic
 pydantic-settings
 python-multipart
+
+# Appwrite SDK
+appwrite
