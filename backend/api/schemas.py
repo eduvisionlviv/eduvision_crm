@@ -5,10 +5,9 @@ from typing import Optional, List, Any
 class BaseSchema(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,  # Дозволяє створювати об'єкт як через name, так і через аліас
-        from_attributes=True,   # Дозволяє читати дані з об'єктів PocketBase
-        # ✅ ВИПРАВЛЕНО: 'forbid' змусить API видавати помилку, якщо в базі з'являться нові поля,
-        # яких немає в схемі. Це захистить від "зникнення" даних.
-        extra='forbid'          
+        from_attributes=True,   # Дозволяє читати дані з об'єктів Appwrite
+        # ✅ ВИПРАВЛЕНО: 'ignore' дозволяє безпечно пропускати зайві технічні/нові поля в Appwrite,
+        extra='ignore'          
     )
 
 # --- 1. Схема для Навчальних Центрів (lc) ---
@@ -23,7 +22,7 @@ class LCSchema(BaseSchema):
     staff_count: Optional[int] = Field(default=0)
     student_count: Optional[int] = Field(default=0)
     
-    # Поля дати створення/оновлення, які завжди є в PocketBase
+    # Поля дати створення/оновлення, які завжди є в Appwrite
     created: Optional[str] = Field(default="")
     updated: Optional[str] = Field(default="")
 
