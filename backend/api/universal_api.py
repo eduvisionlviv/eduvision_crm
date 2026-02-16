@@ -1,31 +1,27 @@
-# backend/api/universal_api.py
-import json
 from typing import Any, Dict, List, Optional, Type
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Request
+from appwrite.query import Query
+from fastapi import APIRouter, File, Form, HTTPException, Query as FastQuery, UploadFile
 from pydantic import BaseModel
 
-from backend.services.pocketbase import db
+from backend.environment import settings
+from backend.services.appwrite import db
 
-# Імпортуємо всі схеми з schemas.py
 from .schemas import (
-    LCSchema, 
-    StaffSchema, 
-    RegSchema, 
-    CourseSchema, 
-    RoomSchema, 
+    BaseSchema,
+    CourseSchema,
+    LCSchema,
+    NewTableSchema,
+    RegSchema,
+    RoomSchema,
     SourceSchema,
-    NewTableSchema, # <--- Якщо ви не використовуєте цю таблицю, закоментуйте або видаліть
-    BaseSchema
+    StaffSchema,
 )
 
-router = APIRouter(prefix="/api", tags=["pb-universal"])
+# Зберігаємо префікс /pb для зворотної сумісності фронтенду,
+# але фактично працюємо через Appwrite.
+router = APIRouter(prefix="/api", tags=["appwrite-universal"])
 
-# ───────────────────────────────
-# 🔖 Реєстр схем (Whitelist & Mapping)
-# ───────────────────────────────
-# Ключ = назва таблиці в URL та PocketBase
-# Значення = Pydantic клас для валідації та мапінгу
 TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "lc": LCSchema,
     "user_staff": StaffSchema,
@@ -33,222 +29,217 @@ TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "courses": CourseSchema,
     "rooms": RoomSchema,
     "sources": SourceSchema,
-    
-    # 👇 Впишіть сюди реальну назву таблиці з PocketBase (якщо використовуєте)
-    "new_table_name": NewTableSchema, 
+    "new_table_name": NewTableSchema,
 }
+
+# Технічні поля, які часто потрібні для сорту/фільтру
+BASE_QUERY_FIELDS = {"id", "created", "updated"}
+
 
 class CRUDPayload(BaseModel):
     data: Dict[str, Any]
 
-# ───────────────────────────────
-# 🧩 Допоміжні функції
-# ───────────────────────────────
 
 def resolve_schema(table: str) -> Type[BaseSchema]:
-    """Перевіряє, чи дозволена таблиця, і повертає її схему."""
     if table not in TABLE_SCHEMAS:
         raise HTTPException(
             status_code=403,
-            detail=f"Access to table '{table}' is restricted or schema not defined."
+            detail=f"Access to table '{table}' is restricted or schema not defined.",
         )
     return TABLE_SCHEMAS[table]
 
-def build_filter_expr(filters: List[str]) -> str:
-    """
-    Конвертує прості фільтри format=col:op:val у PocketBase синтаксис.
-    Підтримує: eq, neq, gt, lt, gte, lte, like.
-    Приклад: filters=lc_id:eq:123 -> lc_id = '123'
-    """
-    exprs: List[str] = []
+
+def allowed_query_fields(schema_class: Type[BaseSchema]) -> set[str]:
+    fields = set(BASE_QUERY_FIELDS)
+    for name, field_info in schema_class.model_fields.items():
+        fields.add(name)
+        if field_info.alias:
+            fields.add(field_info.alias)
+    return fields
+
+
+def parse_scalar(value: str) -> Any:
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    if value.lower() == "null":
+        return None
+
+    try:
+        return int(value)
+    except ValueError:
+        pass
+
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def build_query_filters(filters: List[str], allowed_fields: set[str]) -> List[str]:
+    """Parse filters in format field:op:value to Appwrite queries."""
+    queries: List[str] = []
+
     for raw in filters:
-        parts = raw.split(":", 2) # Розбиваємо максимум на 3 частини (col, op, val)
+        parts = raw.split(":", 2)
         if len(parts) < 3:
             continue
-        
-        col, op, val = parts[0], parts[1], parts[2]
 
-        # Базова санітизація значень
-        if val.lower() in ["true", "false", "null"]:
-            safe_val = val.lower()
-        elif val.replace(".", "", 1).isdigit():
-            safe_val = val
+        field, op, raw_value = parts
+
+        if field not in allowed_fields:
+            raise HTTPException(status_code=400, detail=f"Filtering by '{field}' is not allowed")
+
+        parsed_value = parse_scalar(raw_value)
+
+        if op == "eq":
+            queries.append(Query.equal(field, [parsed_value]))
+        elif op == "neq":
+            queries.append(Query.not_equal(field, parsed_value))
+        elif op == "gt":
+            queries.append(Query.greater_than(field, parsed_value))
+        elif op == "lt":
+            queries.append(Query.less_than(field, parsed_value))
+        elif op == "gte":
+            queries.append(Query.greater_than_equal(field, parsed_value))
+        elif op == "lte":
+            queries.append(Query.less_than_equal(field, parsed_value))
+        elif op in ("like", "ilike"):
+            queries.append(Query.search(field, str(parsed_value)))
         else:
-            # Екранування одинарних лапок для безпеки PB
-            safe_val = f"'{val.replace("'", "\\'")}'"
+            raise HTTPException(status_code=400, detail=f"Unsupported filter operation '{op}'")
 
-        if op == "eq": exprs.append(f"{col} = {safe_val}")
-        elif op == "neq": exprs.append(f"{col} != {safe_val}")
-        elif op == "gt": exprs.append(f"{col} > {safe_val}")
-        elif op == "lt": exprs.append(f"{col} < {safe_val}")
-        elif op == "gte": exprs.append(f"{col} >= {safe_val}")
-        elif op == "lte": exprs.append(f"{col} <= {safe_val}")
-        elif op in ("like", "ilike"): exprs.append(f"{col} ~ {safe_val}")
+    return queries
 
-    return " && ".join(exprs)
 
-# ───────────────────────────────
-# 🔍 GET /api/pb/<table> - УНІВЕРСАЛЬНИЙ ПОШУК
-# ───────────────────────────────
+def validate_sort(sort: Optional[str], allowed_fields: set[str]) -> Optional[str]:
+    if not sort:
+        return None
+
+    sort_field = sort[1:] if sort.startswith("-") else sort
+    if sort_field not in allowed_fields:
+        raise HTTPException(status_code=400, detail=f"Sorting by '{sort_field}' is not allowed")
+    return sort
+
+
 @router.get("/pb/{table}")
 def pb_get(
     table: str,
-    request: Request,
-    page: int = Query(1, ge=1),
-    # ✅ ВИПРАВЛЕНО: Збільшено ліміт до 25000 для експорту великих даних
-    perPage: int = Query(50, ge=1, le=25000),
-    sort: Optional[str] = Query(None),
-    expand: Optional[str] = Query(None),
-    filters: Optional[List[str]] = Query(None, alias="filters"), # Підтримка ?filters=...
-    filter_raw: Optional[str] = Query(None, alias="filter"),     # Підтримка ?filter=... (стандарт PB)
-    full_list: bool = Query(False)
+    page: int = FastQuery(1, ge=1),
+    perPage: int = FastQuery(50, ge=1, le=25000),
+    sort: Optional[str] = FastQuery(None),
+    filters: Optional[List[str]] = FastQuery(None, alias="filters"),
+    full_list: bool = FastQuery(False),
 ):
-    client = db.get_client()
-    if not client:
-        raise HTTPException(status_code=503, detail="PocketBase service unavailable")
+    if not db.get_client():
+        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
 
-    # 1. Отримуємо схему (і перевіряємо доступ)
     schema_class = resolve_schema(table)
+    allowed_fields = allowed_query_fields(schema_class)
 
     try:
-        # 2. Формуємо параметри запиту до PB
-        query_options = {}
-        if sort: query_options["sort"] = sort
-        if expand: query_options["expand"] = expand
-        
-        # Пріоритет: filter (raw SQL-like) > filters (simple helper)
-        active_filter = ""
-        if filter_raw:
-            active_filter = filter_raw
-        elif filters:
-            active_filter = build_filter_expr(filters)
-        
-        if active_filter:
-            query_options["filter"] = active_filter
+        safe_sort = validate_sort(sort, allowed_fields)
+        query_filters = build_query_filters(filters or [], allowed_fields)
 
-        # 3. Виконуємо запит до бази
-        raw_items = []
-        meta = {}
+        result = db.list_records(
+            table=table,
+            page=page,
+            per_page=perPage,
+            sort=safe_sort,
+            filters=query_filters,
+            full_list=full_list,
+        )
 
-        if full_list:
-            # Обережно з цим на великих таблицях, але ліміт 25000 дозволяє викачувати багато
-            raw_items = client.collection(table).get_full_list(query_params=query_options)
-            meta = {
-                "page": 1,
-                "perPage": len(raw_items),
-                "totalItems": len(raw_items),
-                "totalPages": 1
-            }
-        else:
-            result = client.collection(table).get_list(page, perPage, query_params=query_options)
-            raw_items = result.items
-            meta = {
-                "page": result.page,
-                "perPage": result.per_page,
-                "totalItems": result.total_items,
-                "totalPages": result.total_pages
-            }
+        clean_items = [
+            schema_class.model_validate(item).model_dump(by_alias=False)
+            for item in result["items"]
+        ]
 
-        # 4. 🔥 НОРМАЛІЗАЦІЯ ДАНИХ ЧЕРЕЗ PYDANTIC 🔥
-        clean_items = []
-        for item in raw_items:
-            # Pydantic читає з атрибутів об'єкта PB
-            validated_obj = schema_class.model_validate(item)
-            # Вивантажуємо в dict, використовуючи "чисті" імена (by_alias=False)
-            clean_items.append(validated_obj.model_dump(by_alias=False))
+        return {**result, "items": clean_items}
 
-        return {
-            **meta,
-            "items": clean_items
-        }
-
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"PB API Error ({table}): {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-# ───────────────────────────────
-# ➕ POST /api/pb/<table> - СТВОРЕННЯ
-# ───────────────────────────────
 @router.post("/pb/{table}")
 def pb_create(table: str, payload: CRUDPayload):
-    client = db.get_client()
-    if not client: raise HTTPException(status_code=503)
-    
+    if not db.get_client():
+        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+
     schema_class = resolve_schema(table)
-    
+
     try:
-        # При створенні запису передаємо дані як є
-        record = client.collection(table).create(payload.data)
-        
-        # Повертаємо вже чистий об'єкт
-        validated = schema_class.model_validate(record)
-        return validated.model_dump(by_alias=False)
-        
+        record = db.create_record(table, payload.data)
+        return schema_class.model_validate(record).model_dump(by_alias=False)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ───────────────────────────────
-# ✏️ PATCH /api/pb/<table>/<id> - ОНОВЛЕННЯ
-# ───────────────────────────────
 @router.patch("/pb/{table}/{record_id}")
 def pb_update(table: str, record_id: str, payload: CRUDPayload):
-    client = db.get_client()
-    if not client: raise HTTPException(status_code=503)
+    if not db.get_client():
+        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
 
     schema_class = resolve_schema(table)
-    
+
     try:
-        record = client.collection(table).update(record_id, payload.data)
-        
-        validated = schema_class.model_validate(record)
-        return validated.model_dump(by_alias=False)
+        record = db.update_record(table, record_id, payload.data)
+        return schema_class.model_validate(record).model_dump(by_alias=False)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ───────────────────────────────
-# 🗑 DELETE /api/pb/<table>/<id> - ВИДАЛЕННЯ
-# ───────────────────────────────
 @router.delete("/pb/{table}/{record_id}")
 def pb_delete(table: str, record_id: str):
-    client = db.get_client()
-    if not client: raise HTTPException(status_code=503)
+    if not db.get_client():
+        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
 
-    resolve_schema(table) # Перевірка доступу
+    resolve_schema(table)
 
     try:
-        client.collection(table).delete(record_id)
+        db.delete_record(table, record_id)
         return {"status": "ok", "id": record_id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ───────────────────────────────
-# 📂 FILE UPLOAD
-# ───────────────────────────────
 @router.post("/pb/{table}/{record_id}/file")
 async def pb_upload_file(
-    table: str, 
-    record_id: str, 
+    table: str,
+    record_id: str,
     field: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
-    client = db.get_client()
-    if not client: raise HTTPException(status_code=503)
+    if not db.get_client():
+        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
 
     schema_class = resolve_schema(table)
 
+    if not settings.APPWRITE_STORAGE_BUCKET_ID:
+        raise HTTPException(
+            status_code=501,
+            detail="File upload requires APPWRITE_STORAGE_BUCKET_ID configuration",
+        )
+
+    allowed_fields = allowed_query_fields(schema_class)
+    if field not in allowed_fields:
+        raise HTTPException(status_code=400, detail=f"File field '{field}' is not allowed")
+
+    content = await file.read()
+    if len(content) > settings.APPWRITE_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is too large. Max allowed is {settings.APPWRITE_MAX_UPLOAD_BYTES} bytes",
+        )
+
     try:
-        # ✅ ВИПРАВЛЕНО: Не читаємо весь файл у RAM (await file.read()).
-        # Передаємо file.file (це потік), щоб уникнути переповнення пам'яті.
-        files_payload = { field: (file.filename, file.file) }
+        uploaded = db.upload_file(file.filename or "upload.bin", content)
 
-        record = client.collection(table).update(record_id, {}, files=files_payload)
-        
-        validated = schema_class.model_validate(record)
-        return validated.model_dump(by_alias=False)
-
+        # Link file id to document field. Appwrite schema should allow this field.
+        record = db.update_record(table, record_id, {field: uploaded.get("$id")})
+        return schema_class.model_validate(record).model_dump(by_alias=False)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
