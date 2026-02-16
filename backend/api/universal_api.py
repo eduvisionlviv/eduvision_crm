@@ -1,8 +1,8 @@
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from appwrite.query import Query
 from fastapi import APIRouter, File, Form, HTTPException, Query as FastQuery, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from backend.environment import settings
 from backend.services.appwrite import db
@@ -38,61 +38,6 @@ BASE_QUERY_FIELDS = {"id", "created", "updated"}
 
 class CRUDPayload(BaseModel):
     data: Dict[str, Any]
-
-
-class TableAttributePayload(BaseModel):
-    key: str
-    type: Literal[
-        "string",
-        "varchar",
-        "text",
-        "mediumtext",
-        "longtext",
-        "integer",
-        "float",
-        "boolean",
-        "datetime",
-        "email",
-        "url",
-        "enum",
-    ]
-    required: bool = False
-    array: bool = False
-    default: Any = None
-    size: Optional[int] = None
-    min: Optional[float] = None
-    max: Optional[float] = None
-    elements: Optional[List[str]] = None
-    encrypt: bool = False
-
-
-class TableIndexPayload(BaseModel):
-    key: str
-    type: Literal["key", "fulltext", "unique", "spatial"] = "key"
-    attributes: List[str] = Field(default_factory=list)
-    orders: Optional[List[Literal["asc", "desc"]]] = None
-    lengths: Optional[List[int]] = None
-
-
-class CreateTablePayload(BaseModel):
-    table_id: str
-    name: str
-    permissions: List[str] = Field(default_factory=list)
-    document_security: bool = False
-    enabled: bool = True
-    attributes: List[TableAttributePayload] = Field(default_factory=list)
-    indexes: List[TableIndexPayload] = Field(default_factory=list)
-
-
-def ensure_schema_mutations_allowed() -> None:
-    if not settings.APPWRITE_ALLOW_SCHEMA_MUTATIONS:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Schema mutations are disabled. "
-                "Set APPWRITE_ALLOW_SCHEMA_MUTATIONS=true to allow creating tables."
-            ),
-        )
 
 
 def resolve_schema(table: str) -> Type[BaseSchema]:
@@ -176,51 +121,6 @@ def validate_sort(sort: Optional[str], allowed_fields: set[str]) -> Optional[str
     if sort_field not in allowed_fields:
         raise HTTPException(status_code=400, detail=f"Sorting by '{sort_field}' is not allowed")
     return sort
-
-
-@router.get("/appwrite/tables")
-def appwrite_list_tables():
-    ensure_schema_mutations_allowed()
-    if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
-
-    try:
-        return db.list_tables()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list tables: {str(e)}")
-
-
-@router.post("/appwrite/tables")
-def appwrite_create_table(payload: CreateTablePayload):
-    ensure_schema_mutations_allowed()
-    if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
-
-    try:
-        collection = db.create_table(
-            table_id=payload.table_id,
-            name=payload.name,
-            permissions=payload.permissions,
-            document_security=payload.document_security,
-            enabled=payload.enabled,
-        )
-
-        created_attributes = []
-        for attr in payload.attributes:
-            created_attributes.append(db.create_table_attribute(payload.table_id, attr.model_dump()))
-
-        created_indexes = []
-        for index in payload.indexes:
-            created_indexes.append(db.create_table_index(payload.table_id, index.model_dump()))
-
-        return {
-            "status": "ok",
-            "collection": collection,
-            "attributes": created_attributes,
-            "indexes": created_indexes,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to create table: {str(e)}")
 
 
 @router.get("/pb/{table}")

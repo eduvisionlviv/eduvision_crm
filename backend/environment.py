@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     # Optional storage integration for file upload endpoint
     APPWRITE_STORAGE_BUCKET_ID: str | None = os.getenv("APPWRITE_STORAGE_BUCKET_ID")
     APPWRITE_MAX_UPLOAD_BYTES: int = int(os.getenv("APPWRITE_MAX_UPLOAD_BYTES", "5242880"))  # 5MB
-    APPWRITE_ALLOW_SCHEMA_MUTATIONS: bool = os.getenv("APPWRITE_ALLOW_SCHEMA_MUTATIONS", "false").lower() == "true"
 
     @property
     def APPWRITE_COLLECTION_MAP(self) -> dict[str, str]:
