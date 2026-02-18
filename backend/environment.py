@@ -6,24 +6,22 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Eduvision CRM"
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 
-    # Appwrite connection
-    APPWRITE_ENDPOINT: str | None = os.getenv("APPWRITE_ENDPOINT")
-    APPWRITE_PROJECT_ID: str | None = os.getenv("APPWRITE_PROJECT_ID")
-    APPWRITE_API_KEY: str | None = os.getenv("APPWRITE_API_KEY")
-    APPWRITE_DATABASE_ID: str | None = os.getenv("APPWRITE_DATABASE_ID")
+    # Teable connection
+    TEABLE_BASE_URL: str = os.getenv("TEABLE_BASE_URL", "https://app.teable.ai")
+    TEABLE_API_TOKEN: str | None = os.getenv("TEABLE_API_TOKEN")
+    TEABLE_TIMEOUT_SECONDS: float = float(os.getenv("TEABLE_TIMEOUT_SECONDS", "20"))
 
-    # Optional mapping for logical table name -> Appwrite collection ID
-    # Format: "lc:learning_centers,user_staff:staff"
-    APPWRITE_COLLECTION_MAP_RAW: str = os.getenv("APPWRITE_COLLECTION_MAP", "")
+    # Optional mapping for logical table name -> Teable table ID
+    # Format: "lc:tblXXXX,user_staff:tblYYYY"
+    TEABLE_TABLE_MAP_RAW: str = os.getenv("TEABLE_TABLE_MAP", "")
 
-    # Optional storage integration for file upload endpoint
-    APPWRITE_STORAGE_BUCKET_ID: str | None = os.getenv("APPWRITE_STORAGE_BUCKET_ID")
-    APPWRITE_MAX_UPLOAD_BYTES: int = int(os.getenv("APPWRITE_MAX_UPLOAD_BYTES", "5242880"))  # 5MB
+    # Upload limits for /file endpoint (currently placeholder integration)
+    TEABLE_MAX_UPLOAD_BYTES: int = int(os.getenv("TEABLE_MAX_UPLOAD_BYTES", "5242880"))  # 5MB
 
     @property
-    def APPWRITE_COLLECTION_MAP(self) -> dict[str, str]:
+    def TEABLE_TABLE_MAP(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
-        raw = self.APPWRITE_COLLECTION_MAP_RAW.strip()
+        raw = self.TEABLE_TABLE_MAP_RAW.strip()
         if not raw:
             return mapping
 
