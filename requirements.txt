@@ -1,4 +1,4 @@
-# Backend Dependencies - Appwrite Edition
+# Backend Dependencies - Teable Edition
 
 fastapi
 uvicorn[standard]
@@ -6,6 +6,3 @@ httpx
 pydantic
 pydantic-settings
 python-multipart
-
-# Appwrite SDK
-appwrite

@@ -2,11 +2,10 @@ import hmac
 import re
 from typing import Optional
 
-from appwrite.query import Query
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.services.appwrite import db
+from backend.services.teable import db
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -19,25 +18,24 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 def login_user(body: LoginRequest):
-    client = db.get_client()
-    if not client:
-        raise HTTPException(status_code=500, detail="Appwrite client not available")
+    if not db.get_client():
+        raise HTTPException(status_code=500, detail="Teable client not available")
 
     try:
         email = body.email.strip().lower()
         password_input = body.password.strip()
 
-        queries = [Query.equal("user_mail", [email]), Query.limit(1)]
-        if body.center:
-            queries.append(Query.equal("lc_id", [body.center]))
-
-        result = client.list_documents(
-            db.database_id,
-            db.resolve_collection_id("user_staff"),
-            queries,
+        result = db.list_records(
+            table="user_staff",
+            page=1,
+            per_page=200,
+            full_list=True,
         )
 
-        users = result.get("documents", [])
+        users = [u for u in result.get("items", []) if str(u.get("user_mail", "")).strip().lower() == email]
+        if body.center:
+            users = [u for u in users if str(u.get("lc_id", "")).strip() == body.center]
+
         if not users:
             raise HTTPException(status_code=401, detail="Невірний email або пароль")
 
@@ -57,7 +55,7 @@ def login_user(body: LoginRequest):
         return {
             "status": "ok",
             "collection": "user_staff",
-            "token": user.get("$id"),
+            "token": user.get("id"),
             "user": user,
         }
 

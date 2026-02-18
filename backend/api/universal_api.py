@@ -1,11 +1,10 @@
 from typing import Any, Dict, List, Optional, Type
 
-from appwrite.query import Query
 from fastapi import APIRouter, File, Form, HTTPException, Query as FastQuery, UploadFile
 from pydantic import BaseModel
 
 from backend.environment import settings
-from backend.services.appwrite import db
+from backend.services.teable import db
 
 from .schemas import (
     BaseSchema,
@@ -18,9 +17,8 @@ from .schemas import (
     StaffSchema,
 )
 
-# Зберігаємо префікс /pb для зворотної сумісності фронтенду,
-# але фактично працюємо через Appwrite.
-router = APIRouter(prefix="/api", tags=["appwrite-universal"])
+# Зберігаємо префікс /pb для зворотної сумісності фронтенду.
+router = APIRouter(prefix="/api", tags=["teable-universal"])
 
 TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "lc": LCSchema,
@@ -32,7 +30,6 @@ TABLE_SCHEMAS: Dict[str, Type[BaseSchema]] = {
     "new_table_name": NewTableSchema,
 }
 
-# Технічні поля, які часто потрібні для сорту/фільтру
 BASE_QUERY_FIELDS = {"id", "created", "updated"}
 
 
@@ -77,9 +74,9 @@ def parse_scalar(value: str) -> Any:
         return value
 
 
-def build_query_filters(filters: List[str], allowed_fields: set[str]) -> List[str]:
-    """Parse filters in format field:op:value to Appwrite queries."""
-    queries: List[str] = []
+def build_query_filters(filters: List[str], allowed_fields: set[str]) -> List[Dict[str, Any]]:
+    """Parse filters in format field:op:value into internal filter dicts."""
+    query_filters: List[Dict[str, Any]] = []
 
     for raw in filters:
         parts = raw.split(":", 2)
@@ -91,26 +88,12 @@ def build_query_filters(filters: List[str], allowed_fields: set[str]) -> List[st
         if field not in allowed_fields:
             raise HTTPException(status_code=400, detail=f"Filtering by '{field}' is not allowed")
 
-        parsed_value = parse_scalar(raw_value)
-
-        if op == "eq":
-            queries.append(Query.equal(field, [parsed_value]))
-        elif op == "neq":
-            queries.append(Query.not_equal(field, parsed_value))
-        elif op == "gt":
-            queries.append(Query.greater_than(field, parsed_value))
-        elif op == "lt":
-            queries.append(Query.less_than(field, parsed_value))
-        elif op == "gte":
-            queries.append(Query.greater_than_equal(field, parsed_value))
-        elif op == "lte":
-            queries.append(Query.less_than_equal(field, parsed_value))
-        elif op in ("like", "ilike"):
-            queries.append(Query.search(field, str(parsed_value)))
-        else:
+        if op not in {"eq", "neq", "gt", "lt", "gte", "lte", "like", "ilike"}:
             raise HTTPException(status_code=400, detail=f"Unsupported filter operation '{op}'")
 
-    return queries
+        query_filters.append({"field": field, "op": op, "value": parse_scalar(raw_value)})
+
+    return query_filters
 
 
 def validate_sort(sort: Optional[str], allowed_fields: set[str]) -> Optional[str]:
@@ -133,7 +116,7 @@ def pb_get(
     full_list: bool = FastQuery(False),
 ):
     if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+        raise HTTPException(status_code=503, detail="Teable service unavailable")
 
     schema_class = resolve_schema(table)
     allowed_fields = allowed_query_fields(schema_class)
@@ -167,7 +150,7 @@ def pb_get(
 @router.post("/pb/{table}")
 def pb_create(table: str, payload: CRUDPayload):
     if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+        raise HTTPException(status_code=503, detail="Teable service unavailable")
 
     schema_class = resolve_schema(table)
 
@@ -181,7 +164,7 @@ def pb_create(table: str, payload: CRUDPayload):
 @router.patch("/pb/{table}/{record_id}")
 def pb_update(table: str, record_id: str, payload: CRUDPayload):
     if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+        raise HTTPException(status_code=503, detail="Teable service unavailable")
 
     schema_class = resolve_schema(table)
 
@@ -195,7 +178,7 @@ def pb_update(table: str, record_id: str, payload: CRUDPayload):
 @router.delete("/pb/{table}/{record_id}")
 def pb_delete(table: str, record_id: str):
     if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+        raise HTTPException(status_code=503, detail="Teable service unavailable")
 
     resolve_schema(table)
 
@@ -214,32 +197,23 @@ async def pb_upload_file(
     file: UploadFile = File(...),
 ):
     if not db.get_client():
-        raise HTTPException(status_code=503, detail="Appwrite service unavailable")
+        raise HTTPException(status_code=503, detail="Teable service unavailable")
 
     schema_class = resolve_schema(table)
-
-    if not settings.APPWRITE_STORAGE_BUCKET_ID:
-        raise HTTPException(
-            status_code=501,
-            detail="File upload requires APPWRITE_STORAGE_BUCKET_ID configuration",
-        )
-
     allowed_fields = allowed_query_fields(schema_class)
     if field not in allowed_fields:
         raise HTTPException(status_code=400, detail=f"File field '{field}' is not allowed")
 
     content = await file.read()
-    if len(content) > settings.APPWRITE_MAX_UPLOAD_BYTES:
+    if len(content) > settings.TEABLE_MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File is too large. Max allowed is {settings.APPWRITE_MAX_UPLOAD_BYTES} bytes",
+            detail=f"File is too large. Max allowed is {settings.TEABLE_MAX_UPLOAD_BYTES} bytes",
         )
 
     try:
         uploaded = db.upload_file(file.filename or "upload.bin", content)
-
-        # Link file id to document field. Appwrite schema should allow this field.
-        record = db.update_record(table, record_id, {field: uploaded.get("$id")})
+        record = db.update_record(table, record_id, {field: uploaded.get("url") or uploaded.get("token")})
         return schema_class.model_validate(record).model_dump(by_alias=False)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        raise HTTPException(status_code=501, detail=f"Upload integration pending: {str(e)}")
